@@ -1,0 +1,240 @@
+\section{CPU Implementation}
+
+\subsection{Reference Implementations}
+
+For all four ciphers --- \textbf{SIMECK, SIMON, TWINE, and WARP} --- correct reference implementations were developed based on their standard specifications.
+
+\begin{itemize}
+    \item \textbf{SIMECK and SIMON}: Implemented as ARX-based Feistel structures using bitwise rotation, AND, and XOR operations.
+    \item \textbf{TWINE}: Implemented as a lightweight Substitution-Permutation Network (SPN) operating on 4-bit nibbles.
+    \item \textbf{WARP}: Implemented as a substitution-permutation cipher with round constants and linear diffusion.
+\end{itemize}
+
+Each implementation includes:
+\begin{itemize}
+    \item A complete \textbf{key schedule}
+    \item Correct \textbf{round transformations}
+    \item Deterministic plaintext initialization for reproducibility
+\end{itemize}
+
+\subsection{Single-Threaded Implementation}
+
+A baseline single-threaded version was implemented for each cipher. These implementations process one block at a time using sequential loops over all rounds.
+
+These serve as:
+\begin{itemize}
+    \item A \textbf{correctness reference}
+    \item A \textbf{performance baseline}
+\end{itemize}
+
+Execution time was measured using high-resolution timers (\texttt{chrono} or \texttt{clock}), and throughput was computed as:
+
+\begin{equation}
+\text{Throughput} = \frac{\text{Total Data Processed}}{\text{Execution Time}}
+\end{equation}
+
+\subsection{Multi-Threaded CPU Implementation}
+
+Parallel CPU implementations were developed using \textbf{OpenMP}.
+
+\subsubsection{Parallelization Strategy}
+
+Encryption was parallelized across plaintext blocks:
+
+\begin{verbatim}
+#pragma omp parallel for
+for (int i = 0; i < N; i++)
+    encrypt(...)
+\end{verbatim}
+
+\subsubsection{Bit-Slicing Optimization}
+
+For \textbf{TWINE} and \textbf{WARP}, a bit-sliced implementation was used:
+\begin{itemize}
+    \item 32 plaintext blocks are processed simultaneously
+    \item Each bit position is stored across a 32-bit word
+    \item Enables SIMD-style parallelism on CPU
+\end{itemize}
+
+This approach improves computational efficiency and reduces memory overhead.
+
+\subsection{CPU Configuration}
+
+All CPU experiments were conducted on the following system:
+
+\begin{itemize}
+    \item \textbf{Processor:} AMD Ryzen 7 5800H
+    \item \textbf{Cores/Threads:} 8 cores / 16 threads
+    \item \textbf{RAM:} 16 GB
+    \item \textbf{Architecture:} x86\_64
+    \item \textbf{Operating System:} Windows 11
+    \item \textbf{Compiler/IDE:} Visual Studio 2022 (MSVC v143)
+\end{itemize}
+
+\subsection{Metrics Collected}
+
+For each cipher and configuration:
+\begin{itemize}
+    \item Execution time (seconds)
+    \item Throughput (GB/s)
+    \item Speedup over single-threaded baseline
+\end{itemize}
+
+\section{GPU Implementation (CUDA)}
+
+\subsection{Parallelization Strategy}
+
+CUDA-based implementations were developed for all ciphers.
+
+\subsubsection{Thread Mapping}
+
+\begin{itemize}
+    \item Each thread processes:
+    \begin{itemize}
+        \item One block (SIMECK, SIMON)
+        \item One batch of 32 blocks (TWINE, WARP using bit-slicing)
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Kernel Design}
+
+A grid-stride loop was used for scalability:
+
+\begin{verbatim}
+for (int i = idx; i < N; i += stride)
+    encrypt(...)
+\end{verbatim}
+
+\subsubsection{Thread Configuration}
+
+\begin{itemize}
+    \item \textbf{Block size:} 256 threads
+    \item \textbf{Grid size:} $\lceil N / 256 \rceil$
+\end{itemize}
+
+\textbf{Justification:}
+\begin{itemize}
+    \item 256 threads aligns with warp scheduling (multiples of 32)
+    \item Ensures high occupancy on the GPU
+    \item Grid-stride loops allow efficient scaling for large inputs
+\end{itemize}
+
+\subsection{Memory Management}
+
+\subsubsection{Host-Device Transfers}
+
+The following were explicitly measured:
+\begin{itemize}
+    \item Host-to-Device (H2D) transfer time
+    \item Device-to-Host (D2H) transfer time
+\end{itemize}
+
+\subsubsection{Memory Placement}
+
+\begin{itemize}
+    \item \textbf{Global Memory:}
+    \begin{itemize}
+        \item Plaintext and ciphertext buffers
+        \item Large data structures
+    \end{itemize}
+
+    \item \textbf{Constant Memory:}
+    \begin{itemize}
+        \item Round keys (SIMECK, SIMON)
+        \item Round constants and permutation tables (WARP)
+    \end{itemize}
+
+    \item \textbf{Registers:}
+    \begin{itemize}
+        \item Temporary variables during encryption rounds
+    \end{itemize}
+\end{itemize}
+
+\textbf{Justification:}
+\begin{itemize}
+    \item Constant memory provides fast broadcast access for read-only data
+    \item Global memory is necessary for large datasets
+    \item Bit-slicing increases arithmetic intensity, improving GPU utilization
+\end{itemize}
+
+\subsection{GPU Configuration}
+
+All GPU experiments were conducted on:
+
+\begin{itemize}
+    \item \textbf{GPU:} NVIDIA RTX 3050 Ti (95W TDP)
+    \item \textbf{CUDA Version:} CUDA 12.3
+    \item \textbf{Compiler/IDE:} Visual Studio 2022 (MSVC v143)
+\end{itemize}
+
+\section{Correctness Verification}
+
+Correctness was verified through the following methods:
+
+\begin{itemize}
+    \item \textbf{CPU vs GPU comparison:}
+    \begin{itemize}
+        \item Outputs (ciphertexts) were matched for identical inputs
+    \end{itemize}
+
+    \item \textbf{Deterministic test inputs:}
+    \begin{itemize}
+        \item Structured plaintext patterns
+        \item Fixed keys
+    \end{itemize}
+
+    \item \textbf{Cross-validation:}
+    \begin{itemize}
+        \item Single-threaded, OpenMP, and CUDA outputs were compared
+    \end{itemize}
+\end{itemize}
+
+No discrepancies were observed, confirming correctness of all implementations.
+
+\section{Performance Evaluation}
+
+\subsection{Experimental Setup}
+
+\begin{itemize}
+    \item CPU: AMD Ryzen 7 5800H
+    \item GPU: NVIDIA RTX 3050 Ti (95W TDP)
+    \item CUDA Toolkit: 12.3
+    \item Development Environment: Visual Studio 2022 (MSVC v143)
+\end{itemize}
+
+\subsection{Parameters}
+
+Experiments were conducted over varying numbers of plaintext blocks:
+
+\begin{equation}
+N = 2^{10} \text{ to } 10^8
+\end{equation}
+
+\subsection{Metrics}
+
+\begin{itemize}
+    \item Total execution time
+    \item Kernel execution time (GPU)
+    \item Memory transfer time
+    \item Throughput (GB/s)
+    \item Speedup over CPU baseline
+\end{itemize}
+
+\subsection{Observations}
+
+\begin{itemize}
+    \item GPU implementations outperform CPU for large input sizes
+    \item Memory transfer dominates performance for small inputs
+    \item Bit-slicing improves efficiency for TWINE and WARP
+    \item OpenMP provides significant CPU speedup but remains below GPU performance
+\end{itemize}
+
+\subsection{Speedup}
+
+Speedup was calculated as:
+
+\begin{equation}
+\text{Speedup} = \frac{T_{\text{CPU}}}{T_{\text{GPU}}}
+\end{equation}
+
+This was evaluated across all input sizes and cipher implementations.

@@ -1,0 +1,196 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{longtable}
+
+\geometry{a4paper, margin=1in}
+
+\title{GPU-Accelerated Block Ciphers: Performance Analysis of ARX, Permutation, and SPN Architectures}
+\author{Armaan Singh, Syam Sai Santosh, Bhargav Raman}
+\date{March 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Modern cryptographic systems must handle large volumes of data efficiently. Block ciphers, which operate on fixed-size data blocks, are naturally parallelizable since independent blocks can be encrypted simultaneously. This makes them well-suited for acceleration using Graphics Processing Units (GPUs). This project implements, optimizes, and benchmarks twelve symmetric ciphers across ARX, Permutation, and Substitution-Permutation Network (SPN) architectures. We evaluate each cipher across multiple implementation tiers—ranging from single-threaded baselines to heavily optimized CUDA GPU kernels—to analyze performance bottlenecks, memory transfer overheads, and the architectural factors that influence GPU speedup.
+\end{abstract}
+
+\section{Introduction \& Problem Statement}
+
+The goal of this project is to design and evaluate high-performance block cipher encryption systems across CPU and GPU architectures. Given a batch of plaintext blocks $P_1, P_2, \dots, P_N$, the system computes ciphertext blocks $C_i = E_k(P_i)$. 
+
+While Central Processing Units (CPUs) excel at sequential, complex control flows, GPUs provide massive data parallelism. By accelerating these ciphers, we aim to measure the practical speedup ($T_{CPU}/T_{GPU}$) and identify hardware bottlenecks such as PCIe memory transfer saturation. The project evaluates execution time, throughput (MB/s), and scalability across both Electronic Codebook (ECB) and Counter (CTR) modes.
+
+\section{Cryptographic Setup}
+
+Our evaluation covers twelve block ciphers, broadly categorized by their core design paradigms.
+
+\subsection{ARX based Ciphers}
+\begin{itemize}
+    \item \textbf{SPECK 128/128:} A lightweight ARX-based Feistel cipher with 32 rounds.
+    \item \textbf{LEA-128:} A generalized Feistel network using 32-bit ARX operations.
+    \item \textbf{CHAM-128/128:} A lightweight ARX cipher optimized for constrained devices.
+    \item \textbf{Threefish-256:} A permutation-based ARX cipher used in the Skein hash function.
+\end{itemize}
+
+\subsection{Lightweight Feistel and SPN Ciphers}
+\begin{itemize}
+    \item \textbf{SIMECK and SIMON:} Implemented as ARX-based Feistel structures using bitwise rotation, AND, and XOR operations.
+    \item \textbf{TWINE:} Implemented as a lightweight Substitution-Permutation Network (SPN) operating on 4-bit nibbles.
+    \item \textbf{WARP:} Implemented as a substitution-permutation cipher with round constants and linear diffusion.
+\end{itemize}
+
+\subsection{Standard and Advanced SPN Ciphers}
+\begin{itemize}
+    \item \textbf{AES-128:} Standard 128-bit block size, 10 rounds, byte-oriented state.
+    \item \textbf{GIFT-64-128:} 64-bit block size, 28 rounds, packed 64-bit integer state.
+    \item \textbf{SKINNY-64-128:} 64-bit block size, 36 rounds.
+    \item \textbf{PRESENT-128:} 64-bit block size, 31 rounds, bit-oriented permutation layer.
+\end{itemize}
+
+\section{CPU Implementation}
+
+The CPU implementations serve as the baseline for correctness and performance benchmarking. Due to the wide variety of ciphers, multiple CPU optimization strategies were employed.
+
+\subsection{Single-Threaded and Python Reference Baselines}
+The naive implementations process one block at a time. For ARX ciphers (SPECK, LEA, etc.), pure Python implementations were batched to minimize parsing overhead. These serve as a correctness reference and absolute baseline.
+
+\subsection{Multi-Threaded and Compiled CPU Execution}
+To provide a competitive CPU benchmark, we applied two distinct parallelization strategies depending on the cipher stack:
+\begin{itemize}
+    \item \textbf{Numba JIT (Python):} Used for AES, GIFT, SKINNY, and PRESENT. Python loops are compiled into native LLVM code. Multi-threading is achieved via OpenMP \texttt{prange} parallel block processing across 8 CPU threads.
+    \item \textbf{OpenMP (C/C++):} Used for SIMECK, SIMON, TWINE, and WARP. Encryption is parallelized across plaintext blocks using \texttt{\#pragma omp parallel for}.
+\end{itemize}
+
+\subsection{Bit-Slicing Optimization}
+For TWINE, WARP, SKINNY, and PRESENT, bit-sliced implementations were utilized on the CPU. By storing bits across a 32-bit or 64-bit word, multiple plaintext blocks (e.g., 32 blocks) are processed simultaneously. This enables SIMD-style parallelism on the CPU, heavily reducing memory overhead.
+
+\section{GPU Implementation (CUDA)}
+
+\subsection{Parallelization Strategy and Thread Mapping}
+The GPU implementations leverage grid-stride loops to handle arbitrarily large inputs cleanly:
+\begin{verbatim}
+for (int i = idx; i < N; i += stride)
+    encrypt(...)
+\end{verbatim}
+
+Thread mapping varies based on the arithmetic intensity of the cipher:
+\begin{itemize}
+    \item \textbf{1 Block/Thread:} Used for standard implementations (SIMECK, SIMON).
+    \item \textbf{Coarsened Threads (2 to 8 Blocks/Thread):} Used for AES (2x), GIFT/SKINNY (4x), and PRESENT (8x) to amortize shared-memory setup overhead and hide global-memory latency.
+    \item \textbf{Grid Size:} Along with Thread Coarsening, we use Grid sizes of \frac{N}{256 x2} for AES, \frac{N}{256 x 4} for GIFT and SKINNY and \frac{N}{Block Size x 8} for PRESENT 
+\end{itemize}
+Standard block sizes of 256 threads were chosen to align with warp scheduling, ensuring high occupancy.
+
+\subsection{Memory Management}
+Efficient memory placement is critical for GPU throughput:
+\begin{itemize}
+    \item \textbf{Global Memory:} Used for plaintext/ciphertext buffers (often $\geq$ 1 GB).
+    \item \textbf{Shared Memory:} Used for AES S-boxes (256 B) to eliminate 160 global memory lookups per block. Also used to stage round keys for GIFT, SKINNY, and PRESENT.
+    \item \textbf{Constant Memory:} Used for fast, read-only broadcast access. Round constants, lightweight S-boxes (16 B), and permutation tables utilize this tier.
+\end{itemize}
+
+\subsection{S-Box and Linear Layer Optimizations}
+Specific SPN optimizations include:
+\begin{itemize}
+    \item \textbf{AES MixColumns:} Branchless \texttt{xtime} functions using compound-XOR tricks to avoid divergent warps.
+    \item \textbf{PRESENT pLayer:} Decomposed a traditional 63-iteration bit loop into 4 delta-swap operations (20 instructions).
+    \item \textbf{Bitsliced Boolean S-boxes:} Zero-memory-latency logic gate implementations for SKINNY and PRESENT, drastically outperforming constant-memory table lookups.
+\end{itemize}
+
+\subsection{Mode of Operation: ECB vs. CTR}
+While ECB allows independent parallel encryption, CTR mode introduces counter construction and XOR overhead. For PRESENT, a dedicated \textbf{Native CTR Kernel} was developed that fuses counter generation, encryption, and the XOR step entirely on-device, bypassing host-side XOR bottlenecks.
+
+\section{Correctness Verification}
+
+Correctness was strictly verified across all tiers:
+\begin{itemize}
+    \item Comparing GPU outputs byte-for-byte with OpenMP and JIT CPU outputs.
+    \item Matching outputs against known-answer tests (NIST FIPS-197 for AES, published vectors for GIFT, SKINNY, PRESENT).
+    \item Validating consistency across deterministic plaintext patterns.
+\end{itemize}
+Any mismatch in the pipelines immediately aborted the benchmarking process.
+
+\section{Performance Evaluation}
+
+\subsection{Experimental Setup}
+Given the varied nature of the ciphers, benchmarks were conducted across multiple environments:
+\begin{itemize}
+    \item \textbf{System A (ARX Benchmarks):} Intel Ultra 7 155H, NVIDIA RTX 4060 Laptop GPU (65W), 6GB VRAM, 16 GB RAM, CUDA 11.8.
+    \item \textbf{System C (Standard and Advanced SPN Ciphers):} Intel i7 11370H, NVIDIA RTX 3050 Ti (50W) 4GB VRAM, 16GB RAM, CUDA 12.8.
+    \item \textbf{System B (Lightweight/SPN Benchmarks):} AMD Ryzen 7 5800H, NVIDIA RTX 3050 Ti (95W), CUDA 12.3.
+\end{itemize}
+Input sizes swept Nine orders of magnitude: from $N = 2^{10}$ (1 KB) up to $10^8$ blocks ($\sim$1.6 GB).
+
+\subsection{Cross-Cipher GPU Throughput Analysis}
+
+Throughput scales predictably with input size until PCIe transfer saturation occurs. Below are the peak throughput results across the best-performing variants in ECB mode.
+
+\begin{table}[h!]
+\centering
+\caption{ECB Mode: GPU Throughput (MB/s) for Select SPN Ciphers}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Blocks Processed} & \textbf{AES (constkeys)} & \textbf{GIFT (table)} & \textbf{SKINNY (bitsliced)} & \textbf{PRESENT (bitsliced)} \\ \midrule
+1,024                     & 42.2                     & 11.7                  & 18.3                        & 24.9                         \\
+65,536                    & 470.4                    & 200.2                 & 199.8                       & 529.4                        \\
+1,048,576                 & \textbf{1,043.5}         & \textbf{328.3}        & \textbf{913.3}              & 774.9                        \\
+4,194,304                 & \textbf{1,264.8}         & 223.7                 & \textbf{971.8}              & \textbf{794.6}               \\
+104,857,600               & 972.4                    & 253.5                 & 806.1                       & 449.9                        \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observations:}
+\begin{itemize}
+    \item AES dominates absolute throughput (peaking at $\sim$1,346 MB/s at 10.5M blocks) because its 128-bit block size moves 2$\times$ more data per operation than the 64-bit ciphers.
+    \item Bitsliced variants drastically outperform table lookups for lightweight ciphers. SKINNY bitsliced peaks at 972 MB/s, nearly matching AES.
+    \item At extreme sizes (100M+ blocks), all ciphers experience throughput degradation due to PCIe bandwidth saturation.
+\end{itemize}
+
+\subsection{Speedup Evaluation}
+
+Speedup is computed as $T_{CPU} / T_{GPU}$.
+
+\begin{table}[h!]
+\centering
+\caption{ECB Mode: GPU Speedup over Compiled CPU Baseline}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Blocks Processed} & \textbf{AES (constkeys)} & \textbf{GIFT (table)} & \textbf{SKINNY (bitsliced)} & \textbf{PRESENT (bitsliced)} \\ \midrule
+16,384                    & 1.01$\times$             & 1.75$\times$          & 1.03$\times$                & 2.49$\times$                 \\
+262,144                   & 2.59$\times$             & 3.81$\times$          & \textbf{10.11$\times$}      & \textbf{11.19$\times$}       \\
+4,194,304                 & 4.50$\times$             & 4.25$\times$          & \textbf{11.22$\times$}      & \textbf{11.29$\times$}       \\
+104,857,600               & 3.61$\times$             & 4.60$\times$          & 9.25$\times$                & 5.81$\times$                 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observations:}
+\begin{itemize}
+    \item \textbf{Break-even point:} GPU execution overtakes CPU execution between 16K and 65K blocks. Below this, CUDA kernel launch and transfer latency exceed execution time.
+    \item \textbf{Peak Speedups:} PRESENT and SKINNY maintain $\sim$11$\times$ speedups. ARX ciphers like LEA achieve up to 93$\times$ speedups compared to their naive baselines.
+    \item \textbf{CTR Mode Speedups:} While CTR throughput is generally lower than ECB, PRESENT achieves a massive \textbf{14.21$\times$ speedup} in CTR mode thanks to the native fused kernel bypassing host-side XOR bottlenecks. 
+\end{itemize}
+
+\subsection{Transfer Overhead Analysis}
+To understand true GPU efficiency, we isolated kernel execution time from memory transfer (H2D + D2H) time. At sizes above 4M blocks, \textbf{AES is 90\% transfer-dominated}. Its kernel computation represents a 170$\times$ speedup over the CPU, but moving 16-byte blocks over PCIe drags the end-to-end speedup down to $\sim$4.5$\times$. In contrast, complex ciphers like GIFT remain compute-dominated (only 28\% transfer time).
+
+\section{Conclusion}
+
+This project demonstrates that GPU acceleration significantly improves the performance of block cipher encryption, across ARX, Permutation, and SPN architectures.
+
+Key takeaways include:
+\begin{itemize}
+    \item \textbf{Importance of Architecture:} Bitsliced S-boxes and delta-swap permutation layers drastically outperform standard memory-table lookups on GPUs.
+    \item \textbf{Transfer limits:} For highly optimized algorithms like AES and bitsliced SKINNY, PCIe bandwidth is the primary bottleneck, with memory transfer accounting for up to 90\% of total execution time at large payload sizes.
+    \item \textbf{Fused Operations:} Fusing counter generation and XOR operations directly into the GPU kernel (as seen in PRESENT's CTR mode) is crucial to preventing host-side bottlenecks.
+\end{itemize}
+
+Future work includes exploring asynchronous data transfers (CUDA streams), overlapping computation with memory transfer using pinned memory, and extending bitsliced architectures to remaining ciphers.
+
+\end{document}
