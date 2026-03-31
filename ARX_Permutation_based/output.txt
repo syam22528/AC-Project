@@ -1,0 +1,447 @@
+===== Size: 0.00 MB =====
+Naive Time       : 0.000760s
+Optimized Time   : 0.000728s
+Numba Time       : 0.000077s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 1 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.608120s
+GPU Kernel Time  : 0.447887s
+GPU Mem Time     : 0.160232s
+GPU Throughput   : 0.00 MB/s
+Numba Throughput : 12.67 MB/s
+GPU Blocks/sec   : 105.24
+Speedup (Numba/GPU): 0.00x
+
+===== Size: 0.02 MB =====
+Naive Time       : 0.012486s
+Optimized Time   : 0.017297s
+Numba Time       : 0.000998s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 4 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.002910s
+GPU Kernel Time  : 0.000318s
+GPU Mem Time     : 0.002592s
+GPU Throughput   : 5.37 MB/s
+Numba Throughput : 15.66 MB/s
+GPU Blocks/sec   : 351858.11
+Speedup (Numba/GPU): 0.34x
+
+===== Size: 0.06 MB =====
+Naive Time       : 0.056694s
+Optimized Time   : 0.050337s
+Numba Time       : 0.003195s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 16 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.001524s
+GPU Kernel Time  : 0.000646s
+GPU Mem Time     : 0.000878s
+GPU Throughput   : 41.01 MB/s
+Numba Throughput : 19.56 MB/s
+GPU Blocks/sec   : 2687939.25
+Speedup (Numba/GPU): 2.10x
+
+===== Size: 0.25 MB =====
+Naive Time       : 0.228817s
+Optimized Time   : 0.316225s
+Numba Time       : 0.016573s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 64 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.002060s
+GPU Kernel Time  : 0.000631s
+GPU Mem Time     : 0.001429s
+GPU Throughput   : 121.34 MB/s
+Numba Throughput : 15.08 MB/s
+GPU Blocks/sec   : 7952302.04
+Speedup (Numba/GPU): 8.04x
+
+===== Size: 1.00 MB =====
+Naive Time       : 0.869486s
+Optimized Time   : 0.860161s
+Numba Time       : 0.103625s
+GPU Total Time   : 0.004962s
+GPU Kernel Time  : 0.000349s
+GPU Mem Time     : 0.004613s
+GPU Throughput   : 201.53 MB/s
+Numba Throughput : 9.65 MB/s
+GPU Blocks/sec   : 13207353.92
+Speedup (Numba/GPU): 20.88x
+
+===== Size: 4.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.333675s
+GPU Total Time   : 0.005758s
+GPU Kernel Time  : 0.000499s
+GPU Mem Time     : 0.005260s
+GPU Throughput   : 694.65 MB/s
+Numba Throughput : 11.99 MB/s
+GPU Blocks/sec   : 45524641.93
+Speedup (Numba/GPU): 57.95x
+
+===== Size: 10.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.767143s
+GPU Total Time   : 0.006445s
+GPU Kernel Time  : 0.000178s
+GPU Mem Time     : 0.006266s
+GPU Throughput   : 1551.69 MB/s
+Numba Throughput : 13.04 MB/s
+GPU Blocks/sec   : 101691717.41
+Speedup (Numba/GPU): 119.04x
+
+===== Size: 50.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 3.603774s
+GPU Total Time   : 0.088622s
+GPU Kernel Time  : 0.010241s
+GPU Mem Time     : 0.078381s
+GPU Throughput   : 564.19 MB/s
+Numba Throughput : 13.87 MB/s
+GPU Blocks/sec   : 36974882.31
+Speedup (Numba/GPU): 40.66x
+
+===== Size: 100.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 6.456471s
+GPU Total Time   : 0.174926s
+GPU Kernel Time  : 0.022358s
+GPU Mem Time     : 0.152568s
+GPU Throughput   : 571.67 MB/s
+Numba Throughput : 15.49 MB/s
+GPU Blocks/sec   : 37464917.71
+Speedup (Numba/GPU): 36.91x
+
+===== Size: 0.00 MB =====
+Naive Time       : 0.003139s
+Optimized Time   : 0.002193s
+Numba Time       : 0.000149s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 1 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.217139s
+GPU Kernel Time  : 0.215376s
+GPU Mem Time     : 0.001763s
+GPU Throughput   : 0.00 MB/s
+Numba Throughput : 6.57 MB/s
+GPU Blocks/sec   : 294.74
+Speedup (Numba/GPU): 0.00x
+
+===== Size: 0.02 MB =====
+Naive Time       : 0.028463s
+Optimized Time   : 0.002637s
+Numba Time       : 0.001890s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 4 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.002192s
+GPU Kernel Time  : 0.000459s
+GPU Mem Time     : 0.001733s
+GPU Throughput   : 7.13 MB/s
+Numba Throughput : 8.27 MB/s
+GPU Blocks/sec   : 467206.15
+Speedup (Numba/GPU): 0.86x
+
+===== Size: 0.06 MB =====
+Naive Time       : 0.111654s
+Optimized Time   : 0.019538s
+Numba Time       : 0.011551s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 16 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.004755s
+GPU Kernel Time  : 0.001721s
+GPU Mem Time     : 0.003034s
+GPU Throughput   : 13.14 MB/s
+Numba Throughput : 5.41 MB/s
+GPU Blocks/sec   : 861382.95
+Speedup (Numba/GPU): 2.43x
+
+===== Size: 0.25 MB =====
+Naive Time       : 0.465002s
+Optimized Time   : 0.046686s
+Numba Time       : 0.055966s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 64 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.005080s
+GPU Kernel Time  : 0.000072s
+GPU Mem Time     : 0.005008s
+GPU Throughput   : 49.21 MB/s
+Numba Throughput : 4.47 MB/s
+GPU Blocks/sec   : 3225146.05
+Speedup (Numba/GPU): 11.02x
+
+===== Size: 1.00 MB =====
+Naive Time       : 1.574278s
+Optimized Time   : 0.167791s
+Numba Time       : 0.143756s
+GPU Total Time   : 0.002762s
+GPU Kernel Time  : 0.000206s
+GPU Mem Time     : 0.002557s
+GPU Throughput   : 362.01 MB/s
+Numba Throughput : 6.96 MB/s
+GPU Blocks/sec   : 23724950.20
+Speedup (Numba/GPU): 52.04x
+
+===== Size: 4.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.586705s
+GPU Total Time   : 0.008256s
+GPU Kernel Time  : 0.000751s
+GPU Mem Time     : 0.007505s
+GPU Throughput   : 484.52 MB/s
+Numba Throughput : 6.82 MB/s
+GPU Blocks/sec   : 31753507.27
+Speedup (Numba/GPU): 71.07x
+
+===== Size: 10.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 1.421870s
+GPU Total Time   : 0.017992s
+GPU Kernel Time  : 0.001816s
+GPU Mem Time     : 0.016176s
+GPU Throughput   : 555.81 MB/s
+Numba Throughput : 7.03 MB/s
+GPU Blocks/sec   : 36425782.35
+Speedup (Numba/GPU): 79.03x
+
+===== Size: 50.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 7.872413s
+GPU Total Time   : 0.085754s
+GPU Kernel Time  : 0.010843s
+GPU Mem Time     : 0.074911s
+GPU Throughput   : 583.06 MB/s
+Numba Throughput : 6.35 MB/s
+GPU Blocks/sec   : 38211523.51
+Speedup (Numba/GPU): 91.80x
+
+===== Size: 100.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 16.094148s
+GPU Total Time   : 0.171926s
+GPU Kernel Time  : 0.022547s
+GPU Mem Time     : 0.149379s
+GPU Throughput   : 581.65 MB/s
+Numba Throughput : 6.21 MB/s
+GPU Blocks/sec   : 38118690.74
+Speedup (Numba/GPU): 93.61x
+
+===== Size: 0.00 MB =====
+Naive Time       : 0.002872s
+Optimized Time   : 0.001676s
+Numba Time       : 0.000041s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 1 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.216121s
+GPU Kernel Time  : 0.214951s
+GPU Mem Time     : 0.001170s
+GPU Throughput   : 0.00 MB/s
+Numba Throughput : 23.59 MB/s
+GPU Blocks/sec   : 296.13
+Speedup (Numba/GPU): 0.00x
+
+===== Size: 0.02 MB =====
+Naive Time       : 0.037218s
+Optimized Time   : 0.030074s
+Numba Time       : 0.000155s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 5 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.002257s
+GPU Kernel Time  : 0.000672s
+GPU Mem Time     : 0.001585s
+GPU Throughput   : 6.92 MB/s
+Numba Throughput : 100.61 MB/s
+GPU Blocks/sec   : 453710.87
+Speedup (Numba/GPU): 0.07x
+
+===== Size: 0.06 MB =====
+Naive Time       : 0.138339s
+Optimized Time   : 0.116539s
+Numba Time       : 0.000267s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 17 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.001134s
+GPU Kernel Time  : 0.000376s
+GPU Mem Time     : 0.000758s
+GPU Throughput   : 55.13 MB/s
+Numba Throughput : 233.91 MB/s
+GPU Blocks/sec   : 3613241.94
+Speedup (Numba/GPU): 0.24x
+
+===== Size: 0.25 MB =====
+Naive Time       : 0.549177s
+Optimized Time   : 0.545524s
+Numba Time       : 0.001757s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 65 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.001324s
+GPU Kernel Time  : 0.000418s
+GPU Mem Time     : 0.000906s
+GPU Throughput   : 188.82 MB/s
+Numba Throughput : 142.31 MB/s
+GPU Blocks/sec   : 12374697.45
+Speedup (Numba/GPU): 1.33x
+
+===== Size: 1.00 MB =====
+Naive Time       : 2.377946s
+Optimized Time   : 2.087607s
+Numba Time       : 0.003922s
+GPU Total Time   : 0.003586s
+GPU Kernel Time  : 0.000304s
+GPU Mem Time     : 0.003282s
+GPU Throughput   : 278.87 MB/s
+Numba Throughput : 254.97 MB/s
+GPU Blocks/sec   : 18275882.79
+Speedup (Numba/GPU): 1.09x
+
+===== Size: 4.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.030126s
+GPU Total Time   : 0.009225s
+GPU Kernel Time  : 0.001079s
+GPU Mem Time     : 0.008146s
+GPU Throughput   : 433.59 MB/s
+Numba Throughput : 132.78 MB/s
+GPU Blocks/sec   : 28415474.07
+Speedup (Numba/GPU): 3.27x
+
+===== Size: 10.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.057355s
+GPU Total Time   : 0.021151s
+GPU Kernel Time  : 0.002603s
+GPU Mem Time     : 0.018548s
+GPU Throughput   : 472.79 MB/s
+Numba Throughput : 174.35 MB/s
+GPU Blocks/sec   : 30984665.12
+Speedup (Numba/GPU): 2.71x
+
+===== Size: 50.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.312237s
+GPU Total Time   : 0.107849s
+GPU Kernel Time  : 0.013514s
+GPU Mem Time     : 0.094335s
+GPU Throughput   : 463.61 MB/s
+Numba Throughput : 160.13 MB/s
+GPU Blocks/sec   : 30383353.93
+Speedup (Numba/GPU): 2.90x
+
+===== Size: 100.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.509787s
+GPU Total Time   : 0.177589s
+GPU Kernel Time  : 0.025479s
+GPU Mem Time     : 0.152110s
+GPU Throughput   : 563.10 MB/s
+Numba Throughput : 196.16 MB/s
+GPU Blocks/sec   : 36903130.90
+Speedup (Numba/GPU): 2.87x
+
+===== Size: 0.00 MB =====
+Naive Time       : 0.003857s
+Optimized Time   : 0.002169s
+Numba Time       : 0.000034s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 1 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.141207s
+GPU Kernel Time  : 0.140163s
+GPU Mem Time     : 0.001044s
+GPU Throughput   : 0.01 MB/s
+Numba Throughput : 28.89 MB/s
+GPU Blocks/sec   : 226.62
+Speedup (Numba/GPU): 0.00x
+
+===== Size: 0.02 MB =====
+Naive Time       : 0.043079s
+Optimized Time   : 0.021805s
+Numba Time       : 0.000055s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 3 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.001262s
+GPU Kernel Time  : 0.000433s
+GPU Mem Time     : 0.000829s
+GPU Throughput   : 12.38 MB/s
+Numba Throughput : 283.06 MB/s
+GPU Blocks/sec   : 405720.66
+Speedup (Numba/GPU): 0.04x
+
+===== Size: 0.06 MB =====
+Naive Time       : 0.134508s
+Optimized Time   : 0.081562s
+Numba Time       : 0.000201s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 9 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.001728s
+GPU Kernel Time  : 0.000544s
+GPU Mem Time     : 0.001184s
+GPU Throughput   : 36.18 MB/s
+Numba Throughput : 311.57 MB/s
+GPU Blocks/sec   : 1185498.01
+Speedup (Numba/GPU): 0.12x
+
+===== Size: 0.25 MB =====
+Naive Time       : 0.601467s
+Optimized Time   : 0.500657s
+Numba Time       : 0.001760s
+C:\Users\omen-14\Desktop\AppliedCrypto\Project\ARX_Permutation_based\venv\lib\site-packages\numba\cuda\dispatcher.py:536: NumbaPerformanceWarning: Grid size 33 will likely result in GPU under-utilization due to low occupancy.
+  warn(NumbaPerformanceWarning(msg))
+GPU Total Time   : 0.005607s
+GPU Kernel Time  : 0.003736s
+GPU Mem Time     : 0.001871s
+GPU Throughput   : 44.59 MB/s
+Numba Throughput : 142.03 MB/s
+GPU Blocks/sec   : 1461147.60
+Speedup (Numba/GPU): 0.31x
+
+===== Size: 1.00 MB =====
+Naive Time       : 2.465304s
+Optimized Time   : 1.379473s
+Numba Time       : 0.004260s
+GPU Total Time   : 0.004533s
+GPU Kernel Time  : 0.000597s
+GPU Mem Time     : 0.003936s
+GPU Throughput   : 220.61 MB/s
+Numba Throughput : 234.75 MB/s
+GPU Blocks/sec   : 7229098.43
+Speedup (Numba/GPU): 0.94x
+
+===== Size: 4.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.017404s
+GPU Total Time   : 0.011015s
+GPU Kernel Time  : 0.002018s
+GPU Mem Time     : 0.008997s
+GPU Throughput   : 363.13 MB/s
+Numba Throughput : 229.84 MB/s
+GPU Blocks/sec   : 11898973.29
+Speedup (Numba/GPU): 1.58x
+
+===== Size: 10.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.045487s
+GPU Total Time   : 0.022246s
+GPU Kernel Time  : 0.004830s
+GPU Mem Time     : 0.017415s
+GPU Throughput   : 449.53 MB/s
+Numba Throughput : 219.84 MB/s
+GPU Blocks/sec   : 14730165.00
+Speedup (Numba/GPU): 2.04x
+
+===== Size: 50.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.245312s
+GPU Total Time   : 0.104986s
+GPU Kernel Time  : 0.023630s
+GPU Mem Time     : 0.081356s
+GPU Throughput   : 476.26 MB/s
+Numba Throughput : 203.82 MB/s
+GPU Blocks/sec   : 15605931.38
+Speedup (Numba/GPU): 2.34x
+
+===== Size: 100.00 MB =====
+Naive/Optimized  : Skipped
+Numba Time       : 0.559515s
+GPU Total Time   : 0.188384s
+GPU Kernel Time  : 0.041209s
+GPU Mem Time     : 0.147175s
+GPU Throughput   : 530.83 MB/s
+Numba Throughput : 178.73 MB/s
+GPU Blocks/sec   : 17394283.30
+Speedup (Numba/GPU): 2.97x
