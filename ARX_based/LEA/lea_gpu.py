@@ -2,7 +2,6 @@ from numba import cuda
 import numpy as np
 import os
 
-# CUDA setup (Windows fix)
 os.environ["NUMBA_CUDA_NVVM"] = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\nvvm\bin\nvvm.dll"
 os.environ["NUMBA_CUDA_DRIVER"] = r"C:\Windows\System32\nvcuda.dll"
 
