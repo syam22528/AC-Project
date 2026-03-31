@@ -7,14 +7,41 @@
 // ✅ Constant memory (faster than global)
 __constant__ uint32_t d_round_keys[ROUNDS];
 
-// Rotate left
-__device__ __forceinline__ uint32_t rotl(uint32_t x, int r) {
+// ✅ Rotate left (Available to both CPU and GPU)
+__host__ __device__ __forceinline__ uint32_t rotl(uint32_t x, int r) {
     return (x << r) | (x >> (32 - r));
 }
 
-// ✅ SIMECK function
-__device__ __forceinline__ uint32_t f(uint32_t x) {
+// ✅ SIMECK function (Available to both CPU and GPU)
+__host__ __device__ __forceinline__ uint32_t f(uint32_t x) {
     return (rotl(x, 5) & x) ^ rotl(x, 1);
+}
+
+// ✅ Host-side Key Schedule (Generates identical keys to CPU version)
+inline void simeck_key_schedule(const uint32_t master_key[4], uint32_t round_keys[ROUNDS]) {
+    uint32_t C = 0xFFFFFFFC; // Constant C = 2^32 - 4
+    
+    uint32_t k  = master_key[0];
+    uint32_t t0 = master_key[1];
+    uint32_t t1 = master_key[2];
+    uint32_t t2 = master_key[3];
+    
+    uint32_t lfsr = 0x3F; // Z1 sequence LFSR
+
+    for (int i = 0; i < ROUNDS; i++) {
+        round_keys[i] = k; 
+        
+        uint32_t z_i = lfsr & 1;
+        uint32_t new_bit = (lfsr ^ (lfsr >> 1)) & 1;
+        lfsr = (lfsr >> 1) | (new_bit << 5);
+
+        uint32_t tmp = k ^ f(t0) ^ C ^ z_i;
+        
+        k  = t0;
+        t0 = t1;
+        t1 = t2;
+        t2 = tmp;
+    }
 }
 
 // ✅ Grid-stride kernel (scalable)
@@ -47,12 +74,14 @@ int main() {
         4194304, 10485760, 52428800 , 104857600
     };
 
-    // ✅ Same simple keys as CPU/OpenMP
+    // ✅ 128-bit Master Key (Must match CPU version exactly)
+    uint32_t master_key[4] = { 0x03020100, 0x0b0a0908, 0x13121110, 0x1b1a1918 };
     uint32_t h_keys[ROUNDS];
-    for (int i = 0; i < ROUNDS; i++)
-        h_keys[i] = i;
+    
+    // Expand master key into 44 round keys on the Host
+    simeck_key_schedule(master_key, h_keys);
 
-    // Copy to constant memory
+    // Copy mathematically valid keys to constant memory
     cudaMemcpyToSymbol(d_round_keys, h_keys, sizeof(uint32_t) * ROUNDS);
 
     std::cout << "===== SIMECK GPU PERFORMANCE =====\n";
@@ -62,9 +91,10 @@ int main() {
         uint32_t *h_left = new uint32_t[N];
         uint32_t *h_right = new uint32_t[N];
 
+        // Setup identical plaintext configuration
         for (int i = 0; i < N; i++) {
             h_left[i] = i;
-            h_right[i] = i ^ 0xdeadbeef;
+            h_right[i] = i ^ 0xabcdabcd;
         }
 
         uint32_t *d_left, *d_right;

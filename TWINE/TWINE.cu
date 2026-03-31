@@ -14,7 +14,7 @@ struct BSState {
 };
 
 // ---------------------------
-// Bit-sliced TWINE S-box
+// TWINE S-box (bitsliced)
 // ---------------------------
 __device__ inline void sbox_bitslice(uint32_t &x0, uint32_t &x1,
                                      uint32_t &x2, uint32_t &x3) {
@@ -51,7 +51,7 @@ __device__ inline void sub_cells(BSState &s) {
 }
 
 // ---------------------------
-// Permutation table
+// TWINE Permutation table
 // ---------------------------
 __device__ const int PERM[16] = {
     0, 9, 2,13,
@@ -70,33 +70,85 @@ __device__ inline void permute(BSState &s) {
 }
 
 // ---------------------------
-// Encrypt one bitslice batch
+// GPU kernel: TWINE encrypt batch
 // ---------------------------
-__device__ void twine_bitslice_encrypt(BSState &s) {
-    for (int r = 0; r < ROUNDS; r++) {
-        sub_cells(s);
-        permute(s);
+__global__ void twine_kernel(BSState *d_data, int batches, uint32_t rk[ROUNDS][16][4]) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = gridDim.x * blockDim.x;
+
+    for (int i = idx; i < batches; i += stride) {
+        BSState s = d_data[i];
+
+        for (int r = 0; r < ROUNDS; r++) {
+            // Add round key
+            for (int n = 0; n < 16; n++)
+                for (int b = 0; b < 4; b++)
+                    s.b[n][b] ^= rk[r][n][b];
+
+            sub_cells(s);
+            permute(s);
+        }
+
+        d_data[i] = s;
     }
 }
 
 // ---------------------------
-// GPU kernel
+// Host round keys (bit-sliced)
 // ---------------------------
-__global__ void twine_kernel(BSState *d_data, int batches) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = gridDim.x * blockDim.x;
+uint32_t round_keys[ROUNDS][16][4];
 
-    for (int i = idx; i < batches; i += stride)
-        twine_bitslice_encrypt(d_data[i]);
+// TWINE S-box for CPU key schedule
+uint8_t SBOX[16] = {
+    0xC,0x0,0xF,0xA,0x2,0xB,0x9,0x5,
+    0x8,0x3,0xD,0x7,0x1,0xE,0x6,0x4
+};
+
+// ---------------------------
+// Key schedule (80-bit master key → 36×16×4 bits)
+// ---------------------------
+void key_schedule(uint8_t key[20]) {
+    uint8_t k[20];
+    memcpy(k, key, 20);
+
+    for (int r = 0; r < ROUNDS; r++) {
+        // First 16 nibbles → round key
+        for (int n = 0; n < 16; n++)
+            for (int b = 0; b < 4; b++)
+                round_keys[r][n][b] = (k[n] >> b) & 1u;
+
+        // Rotate key nibbles
+        uint8_t temp[20];
+        for (int i = 0; i < 20; i++)
+            temp[i] = k[(i + 13) % 20];
+        memcpy(k, temp, 20);
+
+        // Apply S-box to first 4 nibbles
+        for (int i = 0; i < 4; i++)
+            k[i] = SBOX[k[i]];
+
+        // XOR round counter to last nibble
+        k[19] ^= r & 0xF;
+    }
 }
 
 // ---------------------------
-// Host
+// MAIN
 // ---------------------------
 int main() {
-    int test_sizes[] = {1024, 16384, 65536, 262144,
-                        1048576, 4194304, 10485760,
-                        52428800, 104857600};
+    int test_sizes[] = {
+        1024, 16384, 65536, 262144,
+        1048576, 4194304, 10485760,
+        52428800, 104857600
+    };
+
+    // Example 80-bit master key (20 nibbles)
+    uint8_t master_key[20] = {
+        0x0,0x1,0x2,0x3,0x4,0x5,0x6,0x7,0x8,0x9,
+        0xA,0xB,0xC,0xD,0xE,0xF,0x0,0x1,0x2,0x3
+    };
+
+    key_schedule(master_key);
 
     std::cout << "===== GPU BIT-SLICE TWINE PERFORMANCE =====\n";
 
@@ -104,19 +156,41 @@ int main() {
         int N = test_sizes[t];
         int batches = (N + PARALLEL - 1) / PARALLEL;
 
-        // Host bitslice data
+        // ---------------------------
+        // Initialize plaintext bitslice (match CPU)
+        // ---------------------------
         std::vector<BSState> h_data(batches);
-
-        for (int i = 0; i < batches; i++)
+        for (int i = 0; i < batches; i++) {
             for (int n = 0; n < 16; n++)
                 for (int b = 0; b < 4; b++)
-                    h_data[i].b[n][b] = i + n + b;
+                    h_data[i].b[n][b] = 0;
 
+            for (int blk = 0; blk < PARALLEL; blk++) {
+                int global_idx = i * PARALLEL + blk;
+                if (global_idx >= N) break;
+
+                for (int n = 0; n < 16; n++) {
+                    uint8_t val = global_idx % 16;  // same as CPU
+                    for (int b = 0; b < 4; b++)
+                        if (val & (1 << b))
+                            h_data[i].b[n][b] |= (1u << blk);
+                }
+            }
+        }
+
+        // ---------------------------
         // Device allocation
+        // ---------------------------
         BSState *d_data;
         cudaMalloc(&d_data, batches * sizeof(BSState));
 
-        // ---- MEMORY H->D TIME ----
+        uint32_t (*d_round_keys)[16][4];
+        cudaMalloc(&d_round_keys, sizeof(round_keys));
+        cudaMemcpy(d_round_keys, round_keys, sizeof(round_keys), cudaMemcpyHostToDevice);
+
+        // ---------------------------
+        // Copy H->D (measure memory time)
+        // ---------------------------
         cudaEvent_t start_mem, stop_mem;
         cudaEventCreate(&start_mem);
         cudaEventCreate(&stop_mem);
@@ -129,7 +203,9 @@ int main() {
         float mem_time = 0;
         cudaEventElapsedTime(&mem_time, start_mem, stop_mem);
 
-        // ---- KERNEL TIME ----
+        // ---------------------------
+        // Kernel launch
+        // ---------------------------
         int blockSize = 256;
         int gridSize = (batches + blockSize - 1) / blockSize;
 
@@ -138,7 +214,7 @@ int main() {
         cudaEventCreate(&stop_kernel);
 
         cudaEventRecord(start_kernel);
-        twine_kernel<<<gridSize, blockSize>>>(d_data, batches);
+        twine_kernel<<<gridSize, blockSize>>>(d_data, batches, d_round_keys);
         cudaDeviceSynchronize();
         cudaEventRecord(stop_kernel);
         cudaEventSynchronize(stop_kernel);
@@ -146,11 +222,13 @@ int main() {
         float kernel_time = 0;
         cudaEventElapsedTime(&kernel_time, start_kernel, stop_kernel);
 
-        // Copy back only to read first block ciphertext
+        // ---------------------------
+        // Copy D->H only to read first block
+        // ---------------------------
         cudaMemcpy(h_data.data(), d_data, batches * sizeof(BSState), cudaMemcpyDeviceToHost);
 
-        // Print first block ciphertext (approx)
-        std::cout << "Ciphertext (first block approx): ";
+        // Print first block ciphertext
+        std::cout << "Ciphertext (first block): ";
         for (int n = 0; n < 16; n++) {
             uint8_t val = 0;
             for (int b = 0; b < 4; b++)
@@ -169,6 +247,7 @@ int main() {
                   << " | Throughput = " << throughput << " GB/s\n";
 
         cudaFree(d_data);
+        cudaFree(d_round_keys);
     }
 
     return 0;

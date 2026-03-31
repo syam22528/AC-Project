@@ -3,123 +3,105 @@ import matplotlib.pyplot as plt
 # =========================
 # 📊 INPUT SIZES
 # =========================
-N = [1024, 16384, 65536, 262144, 1048576, 4194304, 10485760, 52428800, 104857600]
+N = [1024, 16384, 65536, 262144, 1048576, 4194304, 10485760]
 
 # =========================
-# 🖥️ CPU DATA
+# 🖥️ CPU DATA (SIMON)
 # =========================
 cpu_time = [
-    0.0001023,
-    0.0016423,
-    0.0065669,
-    0.0262392,
-    0.106454,
-    0.421886,
-    1.06258,
-    5.20311,
-    10.4873
+    9.98e-05,
+    0.001602,
+    0.0065641,
+    0.0256668,
+    0.103192,
+    0.416403,
+    1.03092
 ]
 
 cpu_throughput = [
-    0.0800782,
-    0.07981,
-    0.079838,
-    0.0799244,
-    0.0788005,
-    0.0795344,
-    0.0789458,
-    0.0806115,
-    0.0799882
+    0.0820842,
+    0.0818177,
+    0.079872,
+    0.0817068,
+    0.0812916,
+    0.0805816,
+    0.0813705
 ]
 
 # =========================
-# 🚀 GPU DATA
+# 🚀 GPU DATA (SIMON)
 # =========================
 gpu_kernel_time = [
-    0.000134144,
-    8.3968e-05,
-    9.6672e-05,
-    0.000155776,
-    0.000261312,
-    0.00078576,
-    0.00175939,
-    0.00834397,
-    0.0129525
+    0.000130048,
+    3.3792e-05,
+    8.5984e-05,
+    0.00153667,
+    0.000355264,
+    0.000819936,
+    0.00183376
 ]
 
 gpu_mem_time = [
-    6.7584e-05,
-    7.312e-05,
-    0.000172736,
-    0.000599264,
-    0.00160733,
-    0.00536154,
-    0.013082,
-    0.0644299,
-    0.129762
+    4.9152e-05,
+    7.8592e-05,
+    0.000181728,
+    0.00070048,
+    0.00162384,
+    0.00700266,
+    0.0137714
 ]
 
 gpu_throughput = [
-    0.0610687,
-    1.56098,
-    5.42337,
-    13.4626,
-    32.1019,
-    42.7032,
-    47.679,
-    50.2675,
-    64.7645
+    0.0629921,
+    3.87879,
+    6.09751,
+    1.36474,
+    23.6123,
+    40.9232,
+    45.7454
 ]
 
 # Total GPU time = kernel + memory
 gpu_time = [k + m for k, m in zip(gpu_kernel_time, gpu_mem_time)]
 
-# =========================
-# 📊 TIME COMPARISON GRAPH
-# =========================
-plt.figure()
-plt.plot(N, cpu_time, marker='o', label="CPU Time")
-plt.plot(N, gpu_time , marker='s', label="GPU Time")
-
-plt.xscale('log')
-plt.yscale('log')
-
-plt.xlabel("Number of Blocks (N)")
-plt.ylabel("Time (seconds)")
-plt.title("CPU vs GPU Time Comparison")
-plt.legend()
-plt.grid()
-
-plt.savefig("time_comparison.png")
-plt.show()
+# Compute speedup
+speedup = [g / c for g, c in zip(gpu_throughput, cpu_throughput)]
 
 # =========================
-# 📊 THROUGHPUT GRAPH
+# 📊 THREE COLUMNS IN ONE FIGURE
 # =========================
-plt.figure()
-plt.plot(N, cpu_throughput, marker='o', label="CPU Throughput")
-plt.plot(N, gpu_throughput, marker='s', label="GPU Throughput")
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))  # 1 row, 3 columns
 
-plt.xscale('log')
+# --- Time Comparison ---
+axes[0].plot(N, cpu_time, marker='o', label='CPU Time', color='blue')
+axes[0].plot(N, gpu_time, marker='s', label='GPU Time', color='green')
+axes[0].set_xscale('log')
+axes[0].set_yscale('log')
+axes[0].set_xlabel("Blocks (N)")
+axes[0].set_ylabel("Time (s)")
+axes[0].set_title("SIMON CPU vs GPU Time")
+axes[0].grid(True, which='both', ls='--')
+axes[0].legend()
 
-plt.xlabel("Number of Blocks (N)")
-plt.ylabel("Throughput (GB/s)")
-plt.title("CPU vs GPU Throughput")
-plt.legend()
-plt.grid()
+# --- Throughput Comparison ---
+axes[1].plot(N, cpu_throughput, marker='o', label='CPU Throughput', color='blue')
+axes[1].plot(N, gpu_throughput, marker='s', label='GPU Throughput', color='green')
+axes[1].set_xscale('log')
+axes[1].set_xlabel("Blocks (N)")
+axes[1].set_ylabel("Throughput (GB/s)")
+axes[1].set_title("SIMON CPU vs GPU Throughput")
+axes[1].grid(True, which='both', ls='--')
+axes[1].legend()
 
-plt.savefig("throughput_comparison.png")
-plt.show()
+# --- Speedup ---
+axes[2].plot(N, speedup, marker='^', color='red', label='Speedup (GPU/CPU)')
+axes[2].set_xscale('log')
+axes[2].set_xlabel("Blocks (N)")
+axes[2].set_ylabel("Speedup")
+axes[2].set_title("SIMON GPU Speedup over CPU")
+axes[2].grid(True, which='both', ls='--')
+axes[2].legend()
 
-speedup = [g/c for g, c in zip(gpu_throughput, cpu_throughput)]
-
-plt.figure()
-plt.plot(N, speedup, marker='^')
-plt.xscale('log')
-plt.xlabel("Number of Blocks (N)")
-plt.ylabel("Speedup (GPU / CPU)")
-plt.title("GPU Speedup over CPU")
-plt.grid()
-
-plt.savefig("speedup.png")
+plt.tight_layout()
+plt.savefig("simon_three_columns_updated.png")
 plt.show()
