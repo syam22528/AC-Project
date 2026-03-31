@@ -11,7 +11,7 @@
 
 ## 1. Introduction
 
-This project implements and benchmarks four symmetric ciphers — three based on the **ARX (Add–Rotate–XOR)** paradigm and one based on a **permutation** design — across four progressively optimized execution backends:
+All four ciphers are based on the ARX (Add–Rotate–XOR) paradigm, allowing a consistent comparison of performance across similar cryptographic structures.
 
 | # | Cipher | Family | Block Size | Key Size | Rounds | Word Size |
 |---|--------|--------|------------|----------|--------|-----------|
@@ -21,11 +21,8 @@ This project implements and benchmarks four symmetric ciphers — three based on
 | 4 | **Threefish-256** | ARX (substitution–permutation) | 256-bit | 256-bit | 72 | 64-bit |
 
 
-### 1.1 Motivation
 
-ARX ciphers are designed to be efficient in software — they avoid S-boxes and rely entirely on modular addition, bitwise rotation, and XOR. This makes them natural candidates for **massive parallelism on GPUs**, where thousands of independent blocks can be encrypted simultaneously. This project quantifies exactly how much speedup GPU acceleration provides over CPU-based approaches.
-
-### 1.2 Implementation Tiers
+### 1.1 Implementation Tiers
 
 Each cipher is implemented in four variants:
 
@@ -123,11 +120,11 @@ def cipher_kernel(blocks, out, round_keys, decrypt):
         # ... encrypt/decrypt block j ...
 ```
 
-**Key optimizations:**
-- **Shared memory** for round keys — avoids repeated global memory reads
-- **Grid-stride loops** — each thread processes multiple blocks, enabling efficient handling of inputs larger than the grid
-- **256 threads per block** — balances occupancy and register pressure
-- **CUDA event timing** — precise measurement of kernel execution vs. memory transfer
+**Parallelization Strategy:**
+- Each CUDA thread processes one or more plaintext blocks
+- Grid-stride loops allow handling arbitrarily large inputs
+- 256 threads per block chosen for optimal occupancy
+- Ensures efficient utilization of GPU resources
 
 ### 3.2 Benchmarking Methodology
 
@@ -309,7 +306,81 @@ ARX_Permutation_based/
 
 ---
 
-## 7. How to Run
+## 7. Verifications
+
+Correctness of all cipher implementations (Naive, Optimized, Numba, and CUDA) was rigorously verified using two complementary testing strategies: **functional testing** and **cross-implementation consistency checks**.
+
+---
+
+### 7.1 Functional Testing
+
+Each implementation was tested independently using a fixed key and plaintext:
+
+- Key: `bytes(range(16))`
+- Plaintext: `"This is a test message for LEA cipher!"`
+
+For each variant:
+1. The plaintext was encrypted
+2. The resulting ciphertext was decrypted
+3. The recovered plaintext was compared against the original input
+
+This ensures correctness of both encryption and decryption logic.
+
+Example workflow:
+
+```python
+ct = encrypt(data, key)
+pt = decrypt(ct, key)
+assert pt == data
+```
+This test was executed for:
+- Naive implementation
+- Optimized implementation
+- Numba JIT implementation
+- CUDA GPU implementation (using CPU-based decryption)
+
+### 7.2 Cross-Implementation Consistency
+
+To ensure that all implementations produce identical results, we performed consistency checks across different backends:
+
+```python
+ct_naive = naive_enc(data, key)
+ct_opt = opt_enc(data, key)
+ct_numba = numba_enc(data, key)
+ct_gpu = gpu_enc(data, key)
+
+assert ct_naive == ct_opt == ct_numba == ct_gpu
+```
+
+This verifies that:
+- Naive and Optimized versions match exactly
+- Numba JIT produces the same ciphertext as reference implementations
+- CUDA GPU output matches CPU implementations
+
+### 7.3 GPU Validation Strategy
+Since GPU implementations only perform encryption, correctness was verified by:
+- Decrypting GPU ciphertext using the Numba CPU implementation
+- Comparing the result with the original plaintext
+
+This ensures:
+- GPU encryption logic is correct
+- No discrepancies exist between CPU and GPU outputs
+
+### 7.4 Results
+- All implementations produced identical ciphertext outputs for identical inputs
+- Decryption successfully recovered the original plaintext in all cases
+- No discrepancies were observed across any cipher or execution backend
+
+### 7.5 Generalization
+The same testing framework was applied uniformly across all implemented ciphers:
+- SPECK
+- LEA
+- CHAM
+- Threefish
+This ensures consistent correctness guarantees across the entire project.
+
+**All test functions are available in `main.py` and can be executed by uncommenting the relevant calls.**
+## 8. How to Run
 
 ### Prerequisites
 
@@ -322,7 +393,12 @@ ARX_Permutation_based/
 ```bash
 pip install -r requirements.txt
 ```
+### Updating Nvvm and cuda driver paths in all the gpu implementations
 
+```python
+os.environ["NUMBA_CUDA_NVVM"] = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\nvvm\bin\nvvm.dll"
+os.environ["NUMBA_CUDA_DRIVER"] = r"C:\Windows\System32\nvcuda.dll"
+```
 ### Running Benchmarks
 
 ```bash
