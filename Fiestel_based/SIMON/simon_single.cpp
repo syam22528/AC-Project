@@ -30,7 +30,7 @@ void simon_encrypt(uint32_t &l, uint32_t &r, const uint32_t round_keys[ROUNDS]) 
     }
 }
 
-// Correct SIMON 64/128 Key Schedule
+// SIMON 64/128 Key Schedule
 void simon_key_schedule(const uint32_t master_key[4], uint32_t round_keys[ROUNDS]) {
     const uint64_t z3 = 0b11110000101100111001010001001000000111101001100011010111011011ULL;
     const uint32_t c = 0xfffffffc;

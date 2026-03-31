@@ -30,7 +30,7 @@ __device__ __forceinline__ uint32_t f(uint32_t x) {
     return (rotl(x,1) & rotl(x,8)) ^ rotl(x,2);
 }
 
-// ✅ Correct CPU key expansion for SIMON 64/128
+//  CPU key expansion for SIMON 64/128
 void key_expansion(const uint32_t key[4], uint32_t round_keys[ROUNDS]) {
     const uint32_t c = 0xfffffffc;
 
@@ -42,7 +42,7 @@ void key_expansion(const uint32_t key[4], uint32_t round_keys[ROUNDS]) {
         uint32_t tmp = rotr(round_keys[i-1],3) ^ round_keys[i-3];
         tmp ^= rotr(tmp,1);
         uint32_t z_bit = Z3[(i-4)%62];
-        round_keys[i] = c ^ z_bit ^ tmp ^ round_keys[i-4]; // ✅ NO ~
+        round_keys[i] = c ^ z_bit ^ tmp ^ round_keys[i-4]; 
     }
 }
 
@@ -127,7 +127,7 @@ int main() {
         cudaMemcpy(h_left, d_left, N*sizeof(uint32_t), cudaMemcpyDeviceToHost);
         cudaMemcpy(h_right, d_right, N*sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
-        // ✅ Verification: first block
+        // Verification: first block
         std::cout << std::hex;
         std::cout << "Ciphertext (first block): " << h_left[0] << " " << h_right[0] << std::endl;
         std::cout << std::dec;

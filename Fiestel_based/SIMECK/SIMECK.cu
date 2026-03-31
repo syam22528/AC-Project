@@ -4,20 +4,20 @@
 
 #define ROUNDS 44
 
-// ✅ Constant memory (faster than global)
+// Constant memory (faster than global)
 __constant__ uint32_t d_round_keys[ROUNDS];
 
-// ✅ Rotate left (Available to both CPU and GPU)
+// Rotate left (Available to both CPU and GPU)
 __host__ __device__ __forceinline__ uint32_t rotl(uint32_t x, int r) {
     return (x << r) | (x >> (32 - r));
 }
 
-// ✅ SIMECK function (Available to both CPU and GPU)
+// SIMECK function (Available to both CPU and GPU)
 __host__ __device__ __forceinline__ uint32_t f(uint32_t x) {
     return (rotl(x, 5) & x) ^ rotl(x, 1);
 }
 
-// ✅ Host-side Key Schedule (Generates identical keys to CPU version)
+// Host-side Key Schedule (Generates identical keys to CPU version)
 inline void simeck_key_schedule(const uint32_t master_key[4], uint32_t round_keys[ROUNDS]) {
     uint32_t C = 0xFFFFFFFC; // Constant C = 2^32 - 4
     
@@ -44,7 +44,7 @@ inline void simeck_key_schedule(const uint32_t master_key[4], uint32_t round_key
     }
 }
 
-// ✅ Grid-stride kernel (scalable)
+// Grid-stride kernel (scalable)
 __global__ void simeck_kernel(uint32_t *left, uint32_t *right, int N) {
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -74,7 +74,7 @@ int main() {
         4194304, 10485760, 52428800 , 104857600
     };
 
-    // ✅ 128-bit Master Key (Must match CPU version exactly)
+    // 128-bit Master Key (Must match CPU version exactly)
     uint32_t master_key[4] = { 0x03020100, 0x0b0a0908, 0x13121110, 0x1b1a1918 };
     uint32_t h_keys[ROUNDS];
     
@@ -142,7 +142,7 @@ int main() {
         cudaMemcpy(h_left, d_left, N * sizeof(uint32_t), cudaMemcpyDeviceToHost);
         cudaMemcpy(h_right, d_right, N * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
-        // ✅ PRINT CIPHERTEXT
+        // PRINT CIPHERTEXT
         std::cout << std::hex;
         std::cout << "Ciphertext (first block): "
                   << h_left[0] << " " << h_right[0] << std::endl;

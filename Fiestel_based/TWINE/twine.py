@@ -1,12 +1,12 @@
 import matplotlib.pyplot as plt
 
 # =========================
-# 📊 INPUT SIZES
+# INPUT SIZES
 # =========================
 N = [1024, 16384, 65536, 262144, 1048576, 4194304, 10485760, 52428800, 104857600]
 
 # =========================
-# 🖥️ CPU DATA (TWINE BITSLICE)
+# CPU DATA (TWINE BITSLICE)
 # =========================
 cpu_time = [
     6.57e-05,
@@ -33,7 +33,7 @@ cpu_throughput = [
 ]
 
 # =========================
-# 🚀 GPU DATA (TWINE BITSLICE)
+# GPU DATA (TWINE BITSLICE)
 # =========================
 gpu_mem_time = [
     2.8672e-05,
@@ -78,7 +78,7 @@ gpu_time = [k + m for k, m in zip(gpu_kernel_time, gpu_mem_time)]
 speedup = [g / c for g, c in zip(gpu_throughput, cpu_throughput)]
 
 # =========================
-# 📊 THREE COLUMNS IN ONE FIGURE
+# THREE COLUMNS IN ONE FIGURE
 # =========================
 fig, axes = plt.subplots(1, 3, figsize=(18, 5))  # 1 row, 3 columns
 
