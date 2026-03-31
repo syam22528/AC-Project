@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-"""Correctness checks for GIFT CPU and GPU implementations.
+"""GIFT-64-128 correctness verification for CPU and GPU implementations.
 
-Validates known-answer vectors and cross-checks GPU output against CPU.
+Runs two kinds of checks:
+1. Known-answer tests against published GIFT-64-128 test vectors.
+2. CPU/GPU consistency on random data for all GPU S-box variants
+   (table and bitsliced), ensuring both kernels produce the same output
+   as the CPU reference.
 """
 
 import os
@@ -19,7 +23,8 @@ else:
 
 
 def main() -> None:
-    """Run known-vector checks and CPU/GPU consistency checks."""
+    """Run known-vector checks then CPU/GPU consistency checks for all variants."""
+    # Published GIFT-64-128 test vectors: (plaintext, key, expected_ciphertext).
     vectors = [
         (
             bytes.fromhex("0000000000000000"),
@@ -50,6 +55,7 @@ def main() -> None:
         print("GIFT CPU correctness checks passed (GPU not detected)")
         return
 
+    # Use a large random payload for the CPU/GPU consistency cross-check.
     random_data = os.urandom(8 * 32768)
     key = os.urandom(16)
 

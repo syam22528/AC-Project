@@ -1,7 +1,12 @@
-"""CPU AES-128 implementation (software/Numba only).
+"""AES-128 CPU implementation using Numba JIT.
 
-Single-file design:
-- Software path: clean no-T-table AES rounds (Numba + Python fallback)
+Implements a clean round-based AES-128 in ECB and CTR modes.
+No T-tables are used; the S-box substitution, ShiftRows, and MixColumns
+operations are applied explicitly each round to keep the implementation
+auditable and portable.
+
+Falls back to pure Python stubs if Numba is not installed so the module
+can still be imported (though encryption will raise if Numba is required).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ try:
 except Exception:
 	NUMBA_AVAILABLE = False
 
+	# Provide no-op stubs so the rest of the module imports cleanly.
 	def njit(*args, **kwargs):  # type: ignore
 		def _decorator(fn):
 			return fn
@@ -35,8 +41,7 @@ except Exception:
 		return 1
 
 
-
-
+# AES-128 S-box: 256-entry byte substitution table (FIPS 197, Section 5.1.1).
 SBOX = np.array(
 	[
 		0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -58,27 +63,40 @@ SBOX = np.array(
 	],
 	dtype=np.uint8,
 )
+
+# AES round constants for key expansion (one per round, rounds 1-10).
 RCON = np.array([0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36], dtype=np.uint8)
 
 
 @njit(cache=True)
 def _xtime(x: int) -> int:
+	"""Multiply a GF(2^8) byte by 2 (left shift with conditional 0x1B reduction)."""
 	return ((x << 1) ^ (0x1B if (x & 0x80) else 0x00)) & 0xFF
 
 
 @njit(cache=True)
 def _encrypt_component_jit(data: np.ndarray, expanded: np.ndarray, sbox: np.ndarray) -> np.ndarray:
+	"""Encrypt all 16-byte AES blocks in `data` sequentially (single-threaded JIT path).
+
+	Performs the standard AES-128 round structure: 9 full rounds of
+	SubBytes → ShiftRows → MixColumns → AddRoundKey, followed by a
+	final round without MixColumns.  The initial AddRoundKey uses
+	round-key 0 (bytes 0-15 of `expanded`).
+	"""
 	out = np.empty(data.size, dtype=np.uint8)
 
 	for base in range(0, data.size, 16):
 		s = np.empty(16, dtype=np.uint8)
+		# AddRoundKey with round key 0.
 		for i in range(16):
 			s[i] = data[base + i] ^ expanded[i]
 
+		# Rounds 1-9: SubBytes, ShiftRows, MixColumns, AddRoundKey.
 		for rnd in range(1, 10):
 			for i in range(16):
 				s[i] = sbox[np.int64(s[i])]
 
+			# ShiftRows: row 1 left by 1, row 2 left by 2, row 3 left by 3.
 			t1, t5, t9, t13 = s[1], s[5], s[9], s[13]
 			s[1], s[5], s[9], s[13] = t5, t9, t13, t1
 			t2, t6, t10, t14 = s[2], s[6], s[10], s[14]
@@ -86,6 +104,7 @@ def _encrypt_component_jit(data: np.ndarray, expanded: np.ndarray, sbox: np.ndar
 			t3, t7, t11, t15 = s[3], s[7], s[11], s[15]
 			s[3], s[7], s[11], s[15] = t15, t3, t7, t11
 
+			# MixColumns: multiply each column by the MixColumns matrix in GF(2^8).
 			for c in range(4):
 				i = c * 4
 				a0, a1, a2, a3 = s[i], s[i + 1], s[i + 2], s[i + 3]
@@ -100,6 +119,7 @@ def _encrypt_component_jit(data: np.ndarray, expanded: np.ndarray, sbox: np.ndar
 			for i in range(16):
 				s[i] ^= expanded[rbase + i]
 
+		# Final round: SubBytes and ShiftRows only (no MixColumns).
 		for i in range(16):
 			s[i] = sbox[np.int64(s[i])]
 
@@ -110,6 +130,7 @@ def _encrypt_component_jit(data: np.ndarray, expanded: np.ndarray, sbox: np.ndar
 		t3, t7, t11, t15 = s[3], s[7], s[11], s[15]
 		s[3], s[7], s[11], s[15] = t15, t3, t7, t11
 
+		# AddRoundKey with round key 10 (bytes 160-175 of expanded schedule).
 		for i in range(16):
 			out[base + i] = s[i] ^ expanded[160 + i]
 
@@ -118,15 +139,22 @@ def _encrypt_component_jit(data: np.ndarray, expanded: np.ndarray, sbox: np.ndar
 
 @njit(cache=True, parallel=True)
 def _encrypt_component_jit_parallel(data: np.ndarray, expanded: np.ndarray, sbox: np.ndarray) -> np.ndarray:
+	"""Encrypt all 16-byte AES blocks in `data` in parallel using Numba prange.
+
+	Identical round logic to the sequential variant; each block is processed
+	independently so prange can distribute work across CPU threads (via OpenMP).
+	"""
 	out = np.empty(data.size, dtype=np.uint8)
 	nblocks = data.size // 16
 
 	for b in prange(nblocks):
 		base = b * 16
 		s = np.empty(16, dtype=np.uint8)
+		# AddRoundKey with round key 0.
 		for i in range(16):
 			s[i] = data[base + i] ^ expanded[i]
 
+		# Rounds 1-9.
 		for rnd in range(1, 10):
 			for i in range(16):
 				s[i] = sbox[np.int64(s[i])]
@@ -152,6 +180,7 @@ def _encrypt_component_jit_parallel(data: np.ndarray, expanded: np.ndarray, sbox
 			for i in range(16):
 				s[i] ^= expanded[rbase + i]
 
+		# Final round (no MixColumns).
 		for i in range(16):
 			s[i] = sbox[np.int64(s[i])]
 
@@ -168,12 +197,12 @@ def _encrypt_component_jit_parallel(data: np.ndarray, expanded: np.ndarray, sbox
 	return out
 
 
-
 class AesCpuOptimized:
-	"""AES-128 CPU facade (software/Numba only).
+	"""AES-128 CPU cipher supporting ECB and CTR modes via Numba JIT.
 
 	Args:
-		use_numba: enable Numba acceleration for software path
+		use_numba: Enable Numba JIT acceleration. Falls back to raising
+		           RuntimeError on encryption if disabled.
 	"""
 
 	def __init__(self, use_numba: bool = True) -> None:
@@ -183,6 +212,7 @@ class AesCpuOptimized:
 
 	@staticmethod
 	def _validate_inputs(data: bytes, key: bytes) -> None:
+		"""Raise ValueError if key is not 16 bytes or data is not a multiple of 16 bytes."""
 		if len(key) != 16:
 			raise ValueError("AES-128 requires a 16-byte key")
 		if len(data) % 16 != 0:
@@ -190,6 +220,12 @@ class AesCpuOptimized:
 
 	@staticmethod
 	def _key_expansion_128(key: bytes) -> list[int]:
+		"""Expand a 16-byte AES-128 key into 176 bytes (11 round keys × 16 bytes).
+
+		Implements the AES key schedule: each new 4-byte word is derived by XORing
+		the previous word with the word 16 bytes back, applying RotWord + SubWord +
+		RCON at word boundaries that start a new round key.
+		"""
 		expanded = list(key) + [0] * (176 - 16)
 		bytes_generated = 16
 		rcon_iter = 0
@@ -199,8 +235,11 @@ class AesCpuOptimized:
 			t2 = expanded[bytes_generated - 2]
 			t3 = expanded[bytes_generated - 1]
 			if bytes_generated % 16 == 0:
+				# RotWord: rotate 4-byte word left by 1 byte.
 				t0, t1, t2, t3 = t1, t2, t3, t0
+				# SubWord: apply S-box substitution to each byte.
 				t0, t1, t2, t3 = int(SBOX[t0]), int(SBOX[t1]), int(SBOX[t2]), int(SBOX[t3])
+				# XOR first byte with round constant.
 				t0 ^= int(RCON[rcon_iter])
 				rcon_iter += 1
 			expanded[bytes_generated + 0] = expanded[bytes_generated - 16] ^ t0
@@ -211,14 +250,19 @@ class AesCpuOptimized:
 		return expanded
 
 	def _prepare_key(self, key: bytes) -> np.ndarray:
+		"""Return the expanded key schedule as a NumPy array, using a cached result if available."""
 		if self._sw_last_key != key or self._expanded_np is None:
 			self._expanded_np = np.array(self._key_expansion_128(key), dtype=np.uint8)
 			self._sw_last_key = bytes(key)
 		return self._expanded_np
 
-
-
 	def _encrypt_software_ecb(self, data: bytes, key: bytes, workers: int) -> bytes:
+		"""Run JIT-compiled AES-128 ECB encryption, selecting parallel or sequential path.
+
+		If workers > 1, temporarily raises the Numba thread count to `workers`
+		(capped at available CPU count) and invokes the parallel prange kernel.
+		Restores the original thread count via finally.
+		"""
 		if not self.use_numba:
 			raise RuntimeError("Numba JIT is required for AES software CPU encryption")
 
@@ -239,13 +283,24 @@ class AesCpuOptimized:
 		return out_np.tobytes()
 
 	def encrypt_ecb(self, data: bytes, key: bytes, workers: int = 1) -> bytes:
+		"""Encrypt `data` in AES-128 ECB mode.
+
+		Args:
+			data: Plaintext bytes, must be a multiple of 16.
+			key: 16-byte AES key.
+			workers: Number of CPU threads (>1 enables parallel Numba path).
+		"""
 		self._validate_inputs(data, key)
 		if len(data) == 0:
 			return b""
 		return self._encrypt_software_ecb(data, key, workers=workers)
 
 	def encrypt_ctr(self, data: bytes, key: bytes, workers: int = 1, nonce: bytes | None = None) -> bytes:
-		"""Encrypt data in CTR mode using ECB(counter) keystream generation."""
+		"""Encrypt `data` in AES-128 CTR mode.
+
+		Builds counter blocks (nonce || counter), encrypts them in ECB mode to
+		produce a keystream, then XORs the keystream with the plaintext.
+		"""
 		if len(key) != 16:
 			raise ValueError("AES-128 requires a 16-byte key")
 		if len(data) % 16 != 0:

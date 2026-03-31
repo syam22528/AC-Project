@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-"""PRESENT-128 CPU vs GPU benchmarking in ECB and CTR modes.
+"""PRESENT-128 CPU vs GPU benchmark in ECB and CTR modes.
 
-Measures throughput (MB/s) and speedup for:
-- ECB: direct block encryption (baseline)
-- CTR: counter mode (keystream via ECB + XOR with plaintext)
+Measures throughput (MB/s) and GPU speedup for the table and bitsliced
+S-box GPU variants.  The CPU is timed once per block size; all GPU variants
+share that measurement to avoid redundant CPU work.
 
-Supports GPU variants (table and bitsliced S-box) and CPU threading.
+Results are written to CSV and printed as a formatted table.
 """
 
 import argparse
@@ -31,6 +31,7 @@ else:
 
 @dataclass
 class BenchRow:
+    """One row of benchmark results for a single (block_count, mode, variant) point."""
     mode: str
     cpu_workers: int
     variant: str
@@ -48,24 +49,24 @@ class BenchRow:
 
 
 def parse_block_sizes(text: str) -> list[int]:
-    """Parse comma-separated block sizes from CLI argument."""
+    """Parse a comma-separated string of block counts into a list of integers."""
     return [int(x.strip()) for x in text.split(",") if x.strip()]
 
 
 def parse_int_list(text: str) -> list[int]:
-    """Parse comma-separated integers from CLI argument."""
+    """Parse a comma-separated string of integers into a list of ints."""
     return [int(x.strip()) for x in text.split(",") if x.strip()]
 
 
 def throughput_mbps(num_bytes: int, seconds: float) -> float:
-    """Compute throughput in MB/s (megabytes per second)."""
+    """Compute throughput in MB/s (base-10: 1 MB = 10^6 bytes)."""
     if seconds <= 0:
         return 0.0
     return (num_bytes / seconds) / 1e6
 
 
 def median_time(fn, runs: int) -> float:
-    """Run function `runs` times and return median execution time."""
+    """Call `fn` `runs` times and return the median wall-clock time in seconds."""
     ts = []
     for _ in range(runs):
         t0 = time.perf_counter()
@@ -81,20 +82,20 @@ def benchmark(
     gpu_variants: list[str],
     mode: str,
 ) -> list[BenchRow]:
-    """Benchmark PRESENT-128 in ECB or CTR mode.
-    
-    CPU is timed once per block size; all GPU variants are compared against
-    the same CPU baseline to avoid redundant CPU work.
-    
+    """Run the PRESENT-128 benchmark for all (block_size, variant) combinations.
+
+    The CPU is warmed up and timed once per block size; all GPU S-box variants
+    share that measurement.  Output correctness is verified at every point.
+
     Args:
-        block_sizes: list of block counts to benchmark
-        runs: number of median timing runs per point
-        cpu_workers: number of CPU threads
-        gpu_variants: list of GPU S-box strategies ("table", "bitsliced")
-        mode: encryption mode ("ecb", "ctr")
-    
+        block_sizes:  List of PRESENT-128 block counts to benchmark.
+        runs:         Number of timed runs per point; median is reported.
+        cpu_workers:  Numba thread count for the parallel CPU path.
+        gpu_variants: GPU S-box variants to evaluate ("table", "bitsliced").
+        mode:         Encryption mode: "ecb" or "ctr".
+
     Returns:
-        list of BenchRow measurements
+        List of BenchRow measurements.
     """
     if not has_cuda_gpu():
         raise RuntimeError("No CUDA GPU detected")
@@ -102,7 +103,7 @@ def benchmark(
     key = os.urandom(16)
     cpu = PresentCpuOptimized(use_numba=True)
 
-    # Create one GPU cipher per variant, all sharing the same key.
+    # Instantiate one GPU cipher per variant, sharing the same key.
     gpus = {}
     for v in gpu_variants:
         g = PresentGpuOptimized(block_size=256, variant=v)
@@ -121,7 +122,7 @@ def benchmark(
         plaintext = os.urandom(nbytes)
         ctr_nonce = os.urandom(4)
 
-        # --- CPU: warm-up + timed runs (once) ---
+        # Warm up CPU JIT, then measure median time.
         if mode == "ecb":
             _ = cpu.encrypt_ecb(plaintext, key, workers=cpu_workers)
             cpu_t = median_time(lambda: cpu.encrypt_ecb(plaintext, key, workers=cpu_workers), runs)
@@ -131,11 +132,11 @@ def benchmark(
             cpu_t = median_time(lambda: cpu.encrypt_ctr(plaintext, key, workers=cpu_workers, nonce=ctr_nonce), runs)
             cpu_ct = cpu.encrypt_ctr(plaintext, key, workers=cpu_workers, nonce=ctr_nonce)
 
-        # --- GPU: each variant against same CPU baseline ---
+        # Benchmark each GPU variant against the shared CPU baseline.
         for variant in gpu_variants:
             gpu = gpus[variant]
 
-            # Warm-up
+            # Warm up the GPU kernel before timed runs.
             if mode == "ecb":
                 _ = gpu.encrypt_ecb(plaintext)
             else:
@@ -155,6 +156,7 @@ def benchmark(
                 gpu_kernel_ts.append(timing.kernel_seconds)
                 gpu_transfer_ts.append(timing.h2d_d2h_seconds)
 
+            # Correctness gate: GPU output must match the CPU reference.
             if cpu_ct != gpu_ct:
                 raise RuntimeError(f"CPU/GPU mismatch at {nblocks} blocks (mode={mode}, variant={variant})")
 
@@ -181,61 +183,43 @@ def benchmark(
                 )
             )
 
-    print()  # newline after progress
+    print()   # end progress line
     return rows
 
 
 def write_csv(rows: list[BenchRow], output_csv: Path) -> None:
-    """Write benchmark results to CSV file with headers."""
+    """Write all benchmark rows to a CSV file, creating parent directories if needed."""
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     with output_csv.open("w", newline="", encoding="ascii") as f:
         w = csv.writer(f)
         w.writerow([
-            "mode",
-            "cpu_workers",
-            "variant",
-            "blocks",
-            "bytes_total",
-            "cpu_seconds",
-            "cpu_mbps",
-            "gpu_total_seconds",
-            "gpu_kernel_seconds",
-            "gpu_transfer_seconds",
-            "gpu_total_mbps",
-            "gpu_kernel_mbps",
-            "speedup_total",
-            "speedup_kernel_only",
+            "mode", "cpu_workers", "variant", "blocks", "bytes_total",
+            "cpu_seconds", "cpu_mbps", "gpu_total_seconds", "gpu_kernel_seconds",
+            "gpu_transfer_seconds", "gpu_total_mbps", "gpu_kernel_mbps",
+            "speedup_total", "speedup_kernel_only",
         ])
         for r in rows:
             w.writerow([
-                r.mode,
-                r.cpu_workers,
-                r.variant,
-                r.blocks,
-                r.bytes_total,
-                f"{r.cpu_seconds:.9f}",
-                f"{r.cpu_mbps:.6f}",
-                f"{r.gpu_total_seconds:.9f}",
-                f"{r.gpu_kernel_seconds:.9f}",
+                r.mode, r.cpu_workers, r.variant, r.blocks, r.bytes_total,
+                f"{r.cpu_seconds:.9f}", f"{r.cpu_mbps:.6f}",
+                f"{r.gpu_total_seconds:.9f}", f"{r.gpu_kernel_seconds:.9f}",
                 f"{r.gpu_transfer_seconds:.9f}",
-                f"{r.gpu_total_mbps:.6f}",
-                f"{r.gpu_kernel_mbps:.6f}",
-                f"{r.speedup_total:.6f}",
-                f"{r.speedup_kernel_only:.6f}",
+                f"{r.gpu_total_mbps:.6f}", f"{r.gpu_kernel_mbps:.6f}",
+                f"{r.speedup_total:.6f}", f"{r.speedup_kernel_only:.6f}",
             ])
 
 
 def _variant_description(gpu_variant: str) -> str:
-    """Return human-readable description of GPU S-box variant."""
+    """Return a human-readable description for the given GPU S-box variant label."""
     variant_desc = {
-        "table": "table-lookup S-box (constant memory)",
+        "table":     "table-lookup S-box (constant memory)",
         "bitsliced": "bitsliced tableless S-box (boolean logic)",
     }
     return variant_desc.get(gpu_variant, gpu_variant)
 
 
 def print_summary(rows: list[BenchRow], cpu_workers: int, mode: str) -> None:
-    """Print environment info and benchmark results in table format."""
+    """Print system environment info and a formatted throughput/speedup table."""
     print("\n=== Environment ===")
     print(f"OS: {platform.platform()}")
     print(f"Python: {platform.python_version()}")
@@ -256,18 +240,13 @@ def print_summary(rows: list[BenchRow], cpu_workers: int, mode: str) -> None:
 
 
 def main() -> None:
-    """Parse CLI arguments and run full benchmark matrix."""
+    """Parse CLI arguments and run the full PRESENT-128 benchmark matrix."""
     ap = argparse.ArgumentParser(
         description="PRESENT CPU vs GPU benchmark with configurable S-box strategy (ECB/CTR)"
     )
     ap.add_argument("--cpu-workers", type=str, default="8", help="Comma-separated worker counts")
-    ap.add_argument(
-        "--gpu-variant",
-        type=str,
-        default="both",
-        choices=["table", "bitsliced", "both"],
-        help="S-box implementation: table, bitsliced, or both",
-    )
+    ap.add_argument("--gpu-variant", type=str, default="both", choices=["table", "bitsliced", "both"],
+                    help="S-box implementation: table, bitsliced, or both")
     ap.add_argument("--blocks", type=str, default="1024,16384,65536,262144,1048576,4194304,10485760,52428800,104857600")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--mode", type=str, default="both", choices=["ecb", "ctr", "both"])

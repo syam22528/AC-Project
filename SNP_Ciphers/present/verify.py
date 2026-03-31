@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-"""PRESENT correctness verification for CPU and GPU implementations.
+"""PRESENT-128 correctness verification for CPU and GPU implementations.
 
-Verifies:
-1. NIST test vector for PRESENT-128
-2. CPU/GPU consistency on random data for all GPU variant combinations
+Checks:
+1. NIST-style known-answer test for PRESENT-128 (all-zero plaintext and key).
+2. CPU/GPU consistency on random data for both GPU S-box variants
+   (table and bitsliced), confirming both kernels produce identical output
+   to the CPU reference implementation.
 """
 
 import os
@@ -21,11 +23,11 @@ else:
 
 
 def main() -> None:
-    """Verify PRESENT-128 correctness: NIST vector + random CPU/GPU consistency."""
+    """Run the PRESENT-128 known-answer test then CPU/GPU consistency checks."""
     cpu = PresentCpuOptimized(use_numba=True)
 
+    # Published PRESENT-128 test vector: all-zero plaintext and key.
     pt = bytes.fromhex("0000000000000000")
-    # Known PRESENT-128 test vector.
     key128 = bytes.fromhex("00000000000000000000000000000000")
     expected128 = bytes.fromhex("96db702a2e6900af")
     ct128 = cpu.encrypt_ecb(pt, key128, workers=1)
@@ -36,11 +38,13 @@ def main() -> None:
         print("PRESENT CPU correctness checks passed (GPU not detected)")
         return
 
+    # Cross-check CPU and GPU outputs on a large random payload.
     random_data = os.urandom(8 * 32768)
 
     for variant in ("table", "bitsliced"):
         gpu = PresentGpuOptimized(block_size=256, variant=variant)
 
+        # Verify both GPU variants produce the same output as the CPU for the known key.
         gpu.set_key(key128)
         gpu_ct128, _ = gpu.encrypt_ecb(random_data)
         cpu_ct128 = cpu.encrypt_ecb(random_data, key128, workers=1)

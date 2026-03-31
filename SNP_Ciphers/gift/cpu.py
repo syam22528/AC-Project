@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-"""CPU implementation of GIFT-64-128 with uniform table-based S-box path.
+"""CPU implementation of GIFT-64-128 using a table-based S-box strategy.
 
-Supports Numba JIT parallel execution and a pure-Python fallback path.
+Each round applies: SubNibbles (4-bit table lookup) → PermBits (64-bit bit
+permutation) → AddRoundKey+Constant (XOR with precomputed mask).
+
+Both single-threaded and parallel (Numba prange/OpenMP) paths are supported.
+Falls back to pure-Python stubs if Numba is not installed.
 """
 
 import os
@@ -41,7 +45,11 @@ except Exception:
 
 @njit(cache=True)
 def _sbox_layer_table(state: np.uint64, sbox: np.ndarray) -> np.uint64:
-    """Apply 4-bit table S-box on all 16 nibbles of one 64-bit state."""
+    """Apply the GIFT 4-bit S-box to all 16 nibbles of the 64-bit state.
+
+    Each nibble (4 bits) is extracted, substituted via the table, and
+    reassembled into the output word.
+    """
     out = np.uint64(0)
     for i in range(16):
         nib = np.uint64((state >> np.uint64(i * 4)) & np.uint64(0xF))
@@ -51,7 +59,7 @@ def _sbox_layer_table(state: np.uint64, sbox: np.ndarray) -> np.uint64:
 
 @njit(cache=True)
 def _perm_bits(state: np.uint64, pbox: np.ndarray) -> np.uint64:
-    """Apply GIFT 64-bit permutation layer."""
+    """Apply the GIFT-64 bit permutation: moves bit i of `state` to PBOX[i]."""
     out = np.uint64(0)
     for i in range(64):
         bit = (state >> np.uint64(i)) & np.uint64(1)
@@ -61,7 +69,11 @@ def _perm_bits(state: np.uint64, pbox: np.ndarray) -> np.uint64:
 
 @njit(cache=True, parallel=True)
 def _encrypt_blocks_table(states: np.ndarray, round_masks: np.ndarray, sbox: np.ndarray, pbox: np.ndarray) -> np.ndarray:
-    """Parallel block encryption using table S-box path."""
+    """Encrypt an array of 64-bit GIFT-64 blocks in parallel using Numba prange.
+
+    Each element of `states` is processed independently through 28 rounds of:
+      SubNibbles → PermBits → XOR round mask.
+    """
     out = np.empty_like(states)
     for i in prange(states.size):
         s = np.uint64(states[i])
@@ -74,7 +86,10 @@ def _encrypt_blocks_table(states: np.ndarray, round_masks: np.ndarray, sbox: np.
 
 
 class GiftCpuOptimized:
-    """GIFT-64-128 CPU implementation with uniform table-based S-box strategy."""
+    """GIFT-64-128 CPU cipher using a table-based S-box strategy.
+
+    Supports single-threaded and parallel Numba JIT paths for ECB and CTR modes.
+    """
 
     block_size = 8
 
@@ -85,32 +100,33 @@ class GiftCpuOptimized:
 
     @staticmethod
     def _validate_inputs(data: bytes, key: bytes) -> None:
-        """Validate key length and block alignment."""
+        """Raise ValueError if data is not a multiple of 8 bytes or key is not 16 bytes."""
         if len(data) % 8 != 0:
             raise ValueError("GIFT block size is 8 bytes")
         if len(key) != 16:
             raise ValueError("GIFT-64 uses 16-byte key")
 
     def _get_round_masks(self, key: bytes) -> np.ndarray:
-        """Compute and cache round masks for the current key."""
+        """Return precomputed round masks for `key`, recomputing only on key change."""
         if self._cached_key != key or self._round_masks is None:
             self._round_masks = generate_round_masks(key)
             self._cached_key = bytes(key)
         return self._round_masks
 
     def encrypt_ecb(self, data: bytes, key: bytes, workers: int = 1) -> bytes:
-        """Encrypt ECB blocks with the configured variant.
+        """Encrypt `data` in GIFT-64-128 ECB mode.
 
-Args:
-    data: plaintext bytes, multiple of 8
-    key: 16-byte GIFT key
-    workers: CPU worker threads for Numba parallel path
-"""
+        Args:
+            data: Plaintext bytes, must be a non-zero multiple of 8.
+            key: 16-byte GIFT key.
+            workers: Number of Numba CPU threads for parallel block processing.
+        """
         self._validate_inputs(data, key)
         if len(data) == 0:
             return b""
 
         round_masks = self._get_round_masks(key)
+        # Interpret plaintext as an array of big-endian 64-bit integers.
         states = np.frombuffer(data, dtype=">u8").astype(np.uint64)
 
         if not self.use_numba:
@@ -127,7 +143,11 @@ Args:
         return out.astype(">u8").tobytes()
 
     def encrypt_ctr(self, data: bytes, key: bytes, workers: int = 1, nonce: bytes | None = None) -> bytes:
-        """Encrypt data in CTR mode using ECB(counter) keystream generation."""
+        """Encrypt `data` in GIFT-64-128 CTR mode.
+
+        Builds counter blocks (nonce || counter), encrypts them via ECB to
+        obtain a keystream, then XORs the keystream with the plaintext.
+        """
         if len(data) % 8 != 0:
             raise ValueError("GIFT block size is 8 bytes")
         if len(key) != 16:

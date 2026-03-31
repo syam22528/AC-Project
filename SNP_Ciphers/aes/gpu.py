@@ -1,9 +1,13 @@
-"""GPU-accelerated AES-128 implementation using Numba CUDA.
+"""GPU-accelerated AES-128 using Numba CUDA.
 
-Uses a table-based S-box strategy (shared memory S-box, fastest).
+The default kernel stores the S-box in shared memory (256 bytes per block)
+and loads round keys from device global memory.  An optional constant-memory
+round-key variant is also available; it trades key flexibility for lower
+memory-access latency on hardware with fast constant caches.
 
-Supports key storage in global or constant memory. Default path uses
-shared-memory S-box with global round keys for best performance."""
+Thread coarsening is set to 2 AES blocks per thread to improve arithmetic
+intensity and hide global-memory latency.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from numba import cuda
 from ctr_utils import build_ctr_blocks, xor_bytes
 
 
+# AES-128 S-box used for host-side key expansion and uploaded to device.
 SBOX = np.array(
     [
         0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -40,15 +45,17 @@ SBOX = np.array(
     dtype=np.uint8,
 )
 
+# AES key-schedule round constants (rounds 1-10, one byte each).
 RCON = np.array([0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36], dtype=np.uint8)
 
 
-# ============================================================================
-# Key Expansion (Host-side)
-# ============================================================================
-
 def expand_key_128(key: bytes) -> np.ndarray:
-    """Expand AES-128 key to 11 round keys (176 bytes total)."""
+    """Expand a 16-byte AES-128 key into a flat 176-byte schedule (11 round keys).
+
+    The schedule is stored as a 1-D uint8 array; round key r occupies bytes
+    [r*16 : r*16+16].  Implements the standard AES key expansion algorithm
+    (FIPS 197 Section 5.2).
+    """
     if len(key) != 16:
         raise ValueError("AES-128 requires a 16-byte key")
 
@@ -65,8 +72,11 @@ def expand_key_128(key: bytes) -> np.ndarray:
         t3 = expanded[bytes_generated - 1]
 
         if bytes_generated % 16 == 0:
+            # RotWord: rotate the 4-byte word left by one byte.
             t0, t1, t2, t3 = t1, t2, t3, t0
+            # SubWord: apply S-box to each byte.
             t0, t1, t2, t3 = int(SBOX[t0]), int(SBOX[t1]), int(SBOX[t2]), int(SBOX[t3])
+            # XOR the first byte with the round constant.
             t0 ^= int(RCON[rcon_iter])
             rcon_iter += 1
 
@@ -79,57 +89,60 @@ def expand_key_128(key: bytes) -> np.ndarray:
     return expanded
 
 
-# ============================================================================
-# Numba CUDA Device Functions
-# ============================================================================
+# ---------------------------------------------------------------------------
+# CUDA device functions (run inside kernel threads)
+# ---------------------------------------------------------------------------
 
 @cuda.jit(device=True)
 def xtime_dev(x):
-    """Multiply by 2 in GF(2^8) via branchless shift and conditional XOR."""
+    """Multiply a GF(2^8) byte by 2 using the AES reduction polynomial (0x11B).
+
+    Implemented as branchless: shift left by 1, then XOR 0x1B if the
+    original MSB was set, then mask to 8 bits.
+    """
     return numba.uint8(((x << 1) ^ (((x >> 7) & 1) * 0x1B)) & 0xFF)
 
 
 @cuda.jit(device=True)
 def add_round_key_offset_dev(s, rkeys, offset):
-    """Add (XOR) round key bytes to state from a flat key schedule."""
+    """XOR 16 bytes of state `s` with the round key starting at `rkeys[offset]`."""
     for i in range(16):
         s[i] ^= rkeys[offset + i]
 
 
 @cuda.jit(device=True)
 def sub_bytes_table_dev(s, table):
-    """SubBytes using S-box lookup table."""
+    """Apply SubBytes to all 16 state bytes using the provided S-box lookup table."""
     for i in range(16):
         s[i] = table[s[i]]
 
 
-
 @cuda.jit(device=True)
 def shift_rows_dev(s):
-    """AES ShiftRows: cyclic shift of rows 1-3 left by row number.
-    
-    State is laid out row-major in s[16]:
-      s[0]  s[4]  s[8]  s[12]      # Row 0 (no shift)
-      s[1]  s[5]  s[9]  s[13]      # Row 1 (shift left 1)
-      s[2]  s[6]  s[10] s[14]      # Row 2 (shift left 2)
-      s[3]  s[7]  s[11] s[15]      # Row 3 (shift left 3)
+    """Apply AES ShiftRows to state `s` stored in column-major byte order.
+
+    The 4×4 AES state is laid out column-major in `s[16]`:
+      s[0]  s[4]  s[8]  s[12]   (row 0 — no shift)
+      s[1]  s[5]  s[9]  s[13]   (row 1 — cyclic left shift by 1)
+      s[2]  s[6]  s[10] s[14]   (row 2 — cyclic left shift by 2)
+      s[3]  s[7]  s[11] s[15]   (row 3 — cyclic left shift by 3)
     """
-    # Row 1: rotate left by 1 byte
+    # Row 1: rotate left by 1 byte.
     t = s[1]
     s[1] = s[5]
     s[5] = s[9]
     s[9] = s[13]
     s[13] = t
-    
-    # Row 2: rotate left by 2 bytes (swap positions 0,2 and 1,3)
+
+    # Row 2: rotate left by 2 bytes (swap pairs).
     t = s[2]
     s[2] = s[10]
     s[10] = t
     t = s[6]
     s[6] = s[14]
     s[14] = t
-    
-    # Row 3: rotate left by 3 bytes (equivalent to rotate right by 1)
+
+    # Row 3: rotate left by 3 bytes (equivalent to rotate right by 1).
     t = s[3]
     s[3] = s[15]
     s[15] = s[11]
@@ -139,13 +152,15 @@ def shift_rows_dev(s):
 
 @cuda.jit(device=True)
 def mix_columns_xtime_dev(s):
-    """AES MixColumns using branchless xtime for GF(2^8) multiplication by 2.
-    
-    Multiplies each 4-byte column by the MixColumns matrix in GF(2^8):
+    """Apply AES MixColumns to each of the 4 columns using branchless xtime.
+
+    Each column [a0, a1, a2, a3] is multiplied by the MixColumns matrix
+    in GF(2^8):
       [2 3 1 1]
       [1 2 3 1]
       [1 1 2 3]
       [3 1 1 2]
+    The standard compound trick reduces this to three xtime() calls per column.
     """
     for c in range(4):
         i = c * 4
@@ -161,23 +176,20 @@ def mix_columns_xtime_dev(s):
         s[i + 3] ^= t ^ xtime_dev(numba.uint8(a3 ^ u))
 
 
-# ============================================================================
-# Numba CUDA Kernel
-# ============================================================================
+# ---------------------------------------------------------------------------
+# CUDA kernels
+# ---------------------------------------------------------------------------
 
 @cuda.jit
 def aes_optimized_kernel(input_data, output_data, sbox, rkeys, nblocks):
-    """Default AES kernel: shared-memory S-box, global round keys.
-    
-    Configuration:
-    - S-box in shared memory (256 bytes per block, loaded by threads)
-    - Round keys passed as parameter (loaded from device memory)
-    - Optimized MixColumns via branchless xtime
-    - Thread coarsening: 2 AES blocks per thread for latency hiding
-    
-    This is the recommended implementation for GPU evaluation.
+    """AES-128 ECB encryption kernel: shared-memory S-box, global round keys.
+
+    Each CUDA block cooperatively loads the 256-byte S-box and 176-byte key
+    schedule into shared memory before processing blocks.  Each thread then
+    handles 2 AES blocks (thread coarsening) to hide memory latency and
+    improve arithmetic-to-bandwidth ratio.
     """
-    # Load S-box into shared memory (all threads cooperate)
+    # Cooperatively load S-box and round keys into on-chip shared memory.
     shared_sbox = cuda.shared.array(256, dtype=numba.uint8)
     shared_rkeys = cuda.shared.array(176, dtype=numba.uint8)
     for idx in range(cuda.threadIdx.x, 256, cuda.blockDim.x):
@@ -189,7 +201,7 @@ def aes_optimized_kernel(input_data, output_data, sbox, rkeys, nblocks):
     tid = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
     first_block = tid * 2
 
-    # Process 2 blocks per thread
+    # Each thread encrypts 2 consecutive AES blocks.
     for it in range(2):
         b = first_block + it
         if b >= nblocks:
@@ -198,40 +210,44 @@ def aes_optimized_kernel(input_data, output_data, sbox, rkeys, nblocks):
         base = b * 16
         s = cuda.local.array(16, dtype=numba.uint8)
 
-        # Load plaintext block
+        # Load one 16-byte plaintext block into local register state.
         for i in range(16):
             s[i] = input_data[base + i]
 
-        # Initial round (just AddRoundKey)
+        # Initial AddRoundKey (round key 0).
         add_round_key_offset_dev(s, shared_rkeys, 0)
 
-        # Main rounds 1-9
+        # Rounds 1–9: SubBytes → ShiftRows → MixColumns → AddRoundKey.
         for round_num in range(1, 10):
             sub_bytes_table_dev(s, shared_sbox)
             shift_rows_dev(s)
             mix_columns_xtime_dev(s)
             add_round_key_offset_dev(s, shared_rkeys, round_num * 16)
 
-        # Final round (no MixColumns)
+        # Final round: SubBytes → ShiftRows → AddRoundKey (no MixColumns).
         sub_bytes_table_dev(s, shared_sbox)
         shift_rows_dev(s)
         add_round_key_offset_dev(s, shared_rkeys, 160)
 
-        # Write ciphertext block
+        # Write ciphertext block back to global memory.
         for i in range(16):
             output_data[base + i] = s[i]
 
 
 def make_aes_constkeys_shared_kernel(rkeys_const_np: np.ndarray):
-    """Create key-specialized shared-S-box kernel (round keys in constant memory).
-    
-    Trades key flexibility for faster constant memory access (lower latency,
-    no cache conflicts). Cached by key to avoid recompilation.
+    """Return a key-specialised CUDA kernel that stores round keys in constant memory.
+
+    Captures `rkeys_const_np` at compile time via cuda.const.array_like so
+    the GPU reads round keys from the constant cache instead of global memory.
+    This lowers latency for warp-uniform accesses but requires one compiled
+    kernel instance per distinct key.  Results are cached in AesGpuOptimized
+    to avoid re-JIT-compilation on key reuse.
     """
 
     @cuda.jit
     def aes_constkeys_shared_kernel(input_data, output_data, sbox, nblocks):
         shared_sbox = cuda.shared.array(256, dtype=numba.uint8)
+        # Round keys in constant memory — baked into this kernel at JIT time.
         const_rkeys = cuda.const.array_like(rkeys_const_np)
 
         for idx in range(cuda.threadIdx.x, 256, cuda.blockDim.x):
@@ -270,28 +286,34 @@ def make_aes_constkeys_shared_kernel(rkeys_const_np: np.ndarray):
     return aes_constkeys_shared_kernel
 
 
-# ============================================================================
-# Host Class (AesGpuOptimized)
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Host-side wrapper class
+# ---------------------------------------------------------------------------
 
 @dataclass
 class GpuTiming:
+    """Wall-clock and hardware timing breakdown for a single GPU encryption call."""
     total_seconds: float
     kernel_seconds: float
     h2d_d2h_seconds: float
 
 
 class AesGpuOptimized:
-    """AES GPU implementation used by benchmarks.
+    """AES-128 GPU cipher used by benchmarks.
 
-    Uses shared-memory S-box (default) for best performance.
-    Supports key storage in global or constant memory.
+    Supports two key-storage modes:
+      - 'global'    : round keys passed as a kernel argument (more flexible).
+      - 'constkeys' : round keys baked into constant memory (potentially faster
+                      on hardware with a large constant cache).
+
+    The S-box is always placed in shared memory for low-latency access.
     """
 
     DEFAULT_VARIANT = "shared"
     DEFAULT_KEY_MODE = "global"
     EVALUATION_KEY_MODES = ("global", "constkeys")
 
+    # Class-level cache mapping (variant, key_bytes) -> compiled kernel.
     _constkeys_kernel_cache: dict[tuple[str, bytes], Any] = {}
 
     def __init__(self, block_size: int | None = None, variant: str = DEFAULT_VARIANT, key_mode: str = DEFAULT_KEY_MODE) -> None:
@@ -306,13 +328,18 @@ class AesGpuOptimized:
         if self.key_mode == "global":
             self.kernel = aes_optimized_kernel
         else:
-            # Bound to a specific key in set_key via a cached factory when key_mode=constkeys.
+            # For constkeys, the kernel is bound to a specific key in set_key().
             self.kernel = None
 
         self.sbox_device = cuda.to_device(SBOX)
         self._is_key_set = False
 
     def set_key(self, key: bytes) -> None:
+        """Expand `key` and upload the round-key schedule to device memory.
+
+        For constkeys mode, also compiles (or retrieves a cached) kernel that
+        embeds this key in CUDA constant memory.
+        """
         rkeys = expand_key_128(key)
         self.rkeys_device = cuda.to_device(rkeys)
 
@@ -328,11 +355,18 @@ class AesGpuOptimized:
 
     @staticmethod
     def _validate_data(data: bytes) -> int:
+        """Raise ValueError if data is not a multiple of 16 bytes; return block count."""
         if len(data) % 16 != 0:
             raise ValueError("Input length must be a multiple of 16 bytes")
         return len(data) // 16
 
     def encrypt_ecb(self, data: bytes) -> tuple[bytes, GpuTiming]:
+        """Encrypt `data` in AES-128 ECB mode on the GPU.
+
+        Transfers plaintext host→device, launches the CUDA kernel with CUDA-event
+        timing for accurate kernel-only measurement, then copies ciphertext
+        device→host.  Returns (ciphertext, GpuTiming).
+        """
         if not self._is_key_set:
             raise RuntimeError("Call set_key(key) before encryption")
 
@@ -343,16 +377,17 @@ class AesGpuOptimized:
         arr_in_np = np.frombuffer(data, dtype=np.uint8).copy()
         t0 = time.perf_counter()
 
-        # --- Host → Device transfer ---
+        # Host → Device transfer, timed separately.
         h2d_t0 = time.perf_counter()
         d_in = cuda.to_device(arr_in_np)
         d_out = cuda.device_array_like(d_in)
         h2d_seconds = time.perf_counter() - h2d_t0
 
-        # --- Kernel launch with CUDA event timing ---
+        # Each thread handles 2 blocks; round up to cover all blocks.
         logical_threads = (nblocks + 1) // 2
         grid_size = (logical_threads + self.block_size - 1) // self.block_size
 
+        # Use CUDA events for hardware-accurate kernel timing.
         start_event = cuda.event()
         end_event = cuda.event()
         start_event.record()
@@ -361,7 +396,7 @@ class AesGpuOptimized:
             self.kernel[grid_size, self.block_size](
                 d_in, d_out, self.sbox_device, self.rkeys_device, np.int32(nblocks)
             )
-        else:  # constkeys
+        else:
             self.kernel[grid_size, self.block_size](
                 d_in, d_out, self.sbox_device, np.int32(nblocks)
             )
@@ -370,7 +405,7 @@ class AesGpuOptimized:
         end_event.synchronize()
         kernel_seconds = cuda.event_elapsed_time(start_event, end_event) / 1000.0
 
-        # --- Device → Host transfer ---
+        # Device → Host transfer, timed separately.
         d2h_t0 = time.perf_counter()
         out = d_out.copy_to_host().tobytes()
         d2h_seconds = time.perf_counter() - d2h_t0
@@ -380,7 +415,12 @@ class AesGpuOptimized:
         return out, GpuTiming(total_seconds, kernel_seconds, transfer_seconds)
 
     def encrypt_ctr(self, data: bytes, nonce: bytes | None = None) -> tuple[bytes, GpuTiming]:
-        """Encrypt data in CTR mode using ECB(counter) keystream generation."""
+        """Encrypt `data` in AES-128 CTR mode on the GPU.
+
+        Generates counter blocks on the host, encrypts them via ECB on the GPU
+        to produce a keystream, then XORs the keystream with the plaintext.
+        Timing reflects total wall time; kernel_seconds tracks only the ECB call.
+        """
         nblocks = self._validate_data(data)
         if nblocks == 0:
             return b"", GpuTiming(0.0, 0.0, 0.0)
@@ -394,6 +434,7 @@ class AesGpuOptimized:
 
 
 def has_cuda_gpu() -> bool:
+    """Return True if a CUDA-capable GPU is available and Numba can use it."""
     try:
         return cuda.is_available()
     except Exception:

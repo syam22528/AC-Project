@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-"""Correctness checks for SKINNY CPU and GPU implementations.
+"""SKINNY-64-128 correctness verification for CPU and GPU implementations.
 
-Validates known-answer vectors and cross-checks GPU output against CPU.
+Runs two checks:
+1. A known-answer test against a published SKINNY-64-128 test vector
+   (from the skinny-c reference test suite) to confirm correct CPU output.
+2. CPU/GPU consistency: encrypts a large random payload on the CPU and
+   compares the result against both GPU S-box variants (table and bitsliced).
 """
 
 import os
@@ -19,13 +23,13 @@ else:
 
 
 def main() -> None:
-    """Run known-vector and CPU/GPU consistency checks."""
-    # Test vectors for SKINNY-64-128 from skinny-c tests.
+    """Run the SKINNY-64-128 known-vector check then CPU/GPU consistency checks."""
+    # Published SKINNY-64-128 test vector from the skinny-c reference implementation.
     vectors = [
         (
-            bytes.fromhex("cf16cfe8fd0f98aa"),
-            bytes.fromhex("9eb93640d088da6376a39d1c8bea71e1"),
-            bytes.fromhex("6ceda1f43de92b9e"),
+            bytes.fromhex("cf16cfe8fd0f98aa"),   # plaintext
+            bytes.fromhex("9eb93640d088da6376a39d1c8bea71e1"),   # 128-bit tweakey
+            bytes.fromhex("6ceda1f43de92b9e"),   # expected ciphertext
         ),
     ]
 
@@ -41,6 +45,7 @@ def main() -> None:
         print("SKINNY CPU correctness checks passed (GPU not detected)")
         return
 
+    # Cross-check CPU and GPU outputs on a large random payload.
     random_data = os.urandom(8 * 32768)
     key = os.urandom(16)
 

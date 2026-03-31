@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-"""AES-128 CPU vs GPU benchmarking in ECB and CTR modes.
+"""AES-128 CPU vs GPU benchmark in ECB and CTR modes.
 
-Measures throughput (MB/s) and speedup for:
-- ECB: direct block encryption (baseline)
-- CTR: counter mode (keystream generation via ECB + XOR with plaintext)
+Measures throughput (MB/s) and GPU speedup for:
+  - ECB: direct block cipher encryption — the baseline mode.
+  - CTR: counter mode, implemented as ECB(counter) + XOR with plaintext.
 
-CPU is timed once per block size; all GPU key modes are compared against
-the same CPU baseline to avoid redundant CPU work.
+The CPU is timed once per block size; all GPU key modes (global and constkeys)
+are then compared against that same CPU baseline to avoid redundant timing.
+
+Results are written to a CSV file and also printed as a formatted table.
 """
 
 import argparse
@@ -32,6 +34,7 @@ else:
 
 @dataclass
 class BenchRow:
+    """One row of benchmark results for a single (block_count, mode, key_mode) point."""
     mode: str
     gpu_variant: str
     key_mode: str
@@ -51,29 +54,29 @@ class BenchRow:
 
 
 def parse_block_sizes(text: str) -> list[int]:
-    """Parse comma-separated block sizes from CLI argument."""
+    """Parse a comma-separated string of block counts into a list of integers."""
     return [int(x.strip()) for x in text.split(",") if x.strip()]
 
 
 def parse_csv_list(text: str) -> list[str]:
-    """Parse comma-separated list from CLI argument."""
+    """Parse a comma-separated string into a list of stripped strings."""
     return [x.strip() for x in text.split(",") if x.strip()]
 
 
 def parse_int_list(text: str) -> list[int]:
-    """Parse comma-separated integers from CLI argument."""
+    """Parse a comma-separated string of integers into a list of ints."""
     return [int(x.strip()) for x in text.split(",") if x.strip()]
 
 
 def throughput_mbps(num_bytes: int, seconds: float) -> float:
-    """Compute throughput in MB/s (megabytes per second)."""
+    """Compute throughput in MB/s (megabytes, base-10 definition: 1 MB = 10^6 bytes)."""
     if seconds <= 0:
         return 0.0
     return (num_bytes / seconds) / 1e6
 
 
 def median_time(fn, runs: int) -> float:
-    """Run function `runs` times and return median execution time."""
+    """Call `fn` `runs` times and return the median wall-clock time in seconds."""
     ts: list[float] = []
     for _ in range(runs):
         t0 = time.perf_counter()
@@ -92,10 +95,24 @@ def benchmark(
     key_modes: list[str],
     mode: str,
 ) -> list[BenchRow]:
-    """Benchmark AES in ECB or CTR mode.
+    """Run the AES-128 benchmark for all (block_size, key_mode) combinations.
 
-    CPU is timed once per block size; all GPU key modes are compared against
-    the same CPU baseline to avoid redundant CPU work.
+    The CPU is warmed up and timed once per block size.  All GPU key modes
+    are run against the same CPU measurement to avoid redundant CPU work.
+    CPU/GPU ciphertext equality is verified at each point to detect bugs.
+
+    Args:
+        block_sizes: List of AES block counts to benchmark.
+        runs:        Number of timed runs per point; median is reported.
+        cpu_workers: Numba thread count for the parallel CPU path.
+        cpu_jit:     Whether to enable Numba JIT for the CPU path.
+        cpu_impl:    Label for the CPU implementation (always "software").
+        gpu_variant: GPU S-box variant (always "shared" for AES).
+        key_modes:   List of GPU key-storage modes to evaluate.
+        mode:        Encryption mode: "ecb" or "ctr".
+
+    Returns:
+        List of BenchRow measurements, one per (block_size, key_mode).
     """
     key = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
     cpu = AesCpuOptimized(use_numba=cpu_jit)
@@ -103,7 +120,7 @@ def benchmark(
     if not has_cuda_gpu():
         raise RuntimeError("No CUDA GPU detected")
 
-    # Create one GPU cipher per key_mode, all sharing the same key.
+    # Instantiate one GPU cipher per key mode, all sharing the same key.
     gpus = {}
     for km in key_modes:
         g = AesGpuOptimized(variant=gpu_variant, key_mode=km)
@@ -122,7 +139,7 @@ def benchmark(
         plaintext = np.random.randint(0, 256, nbytes, dtype=np.uint8).tobytes()
         ctr_nonce = os.urandom(8)
 
-        # --- CPU: warm-up + timed runs (once) ---
+        # Warm up the CPU JIT cache, then measure median time.
         if mode == "ecb":
             _ = cpu.encrypt_ecb(plaintext, key, workers=cpu_workers)
             cpu_t = median_time(lambda: cpu.encrypt_ecb(plaintext, key, workers=cpu_workers), runs)
@@ -132,11 +149,11 @@ def benchmark(
             cpu_t = median_time(lambda: cpu.encrypt_ctr(plaintext, key, workers=cpu_workers, nonce=ctr_nonce), runs)
             cpu_ct = cpu.encrypt_ctr(plaintext, key, workers=cpu_workers, nonce=ctr_nonce)
 
-        # --- GPU: each key_mode against same CPU baseline ---
+        # Benchmark each GPU key mode against the shared CPU baseline.
         for km in key_modes:
             gpu = gpus[km]
 
-            # Warm-up
+            # Warm up the GPU kernel (first launch incurs JIT compilation overhead).
             if mode == "ecb":
                 _ = gpu.encrypt_ecb(plaintext)
                 _ = gpu.encrypt_ecb(plaintext)
@@ -158,6 +175,7 @@ def benchmark(
                 gpu_kernel_ts.append(timing.kernel_seconds)
                 gpu_transfer_ts.append(timing.h2d_d2h_seconds)
 
+            # Verify CPU and GPU outputs match (detects any correctness regression).
             if cpu_ct != gpu_ct:
                 raise RuntimeError(f"CPU/GPU mismatch at {nblocks} blocks (mode={mode}, key_mode={km})")
 
@@ -186,56 +204,35 @@ def benchmark(
                 )
             )
 
-    print()  # newline after progress
+    print()   # end the progress line with a newline
     return rows
 
 
 def write_csv(rows: list[BenchRow], output_csv: Path) -> None:
-    """Write benchmark results to CSV file with headers."""
+    """Write all benchmark rows to a CSV file, creating parent directories if needed."""
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     with output_csv.open("w", newline="", encoding="ascii") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "mode",
-            "gpu_variant",
-            "key_mode",
-            "cpu_workers",
-            "cpu_impl",
-            "blocks",
-            "bytes_total",
-            "cpu_seconds",
-            "cpu_mbps",
-            "gpu_total_seconds",
-            "gpu_kernel_seconds",
-            "gpu_transfer_seconds",
-            "gpu_total_mbps",
-            "gpu_kernel_mbps",
-            "speedup_total",
-            "speedup_kernel_only",
+            "mode", "gpu_variant", "key_mode", "cpu_workers", "cpu_impl",
+            "blocks", "bytes_total", "cpu_seconds", "cpu_mbps",
+            "gpu_total_seconds", "gpu_kernel_seconds", "gpu_transfer_seconds",
+            "gpu_total_mbps", "gpu_kernel_mbps", "speedup_total", "speedup_kernel_only",
         ])
         for r in rows:
             writer.writerow([
-                r.mode,
-                r.gpu_variant,
-                r.key_mode,
-                r.cpu_workers,
-                r.cpu_impl,
-                r.blocks,
-                r.bytes_total,
-                f"{r.cpu_seconds:.9f}",
-                f"{r.cpu_mbps:.6f}",
-                f"{r.gpu_total_seconds:.9f}",
-                f"{r.gpu_kernel_seconds:.9f}",
+                r.mode, r.gpu_variant, r.key_mode, r.cpu_workers, r.cpu_impl,
+                r.blocks, r.bytes_total,
+                f"{r.cpu_seconds:.9f}", f"{r.cpu_mbps:.6f}",
+                f"{r.gpu_total_seconds:.9f}", f"{r.gpu_kernel_seconds:.9f}",
                 f"{r.gpu_transfer_seconds:.9f}",
-                f"{r.gpu_total_mbps:.6f}",
-                f"{r.gpu_kernel_mbps:.6f}",
-                f"{r.speedup_total:.6f}",
-                f"{r.speedup_kernel_only:.6f}",
+                f"{r.gpu_total_mbps:.6f}", f"{r.gpu_kernel_mbps:.6f}",
+                f"{r.speedup_total:.6f}", f"{r.speedup_kernel_only:.6f}",
             ])
 
 
 def print_summary(rows: list[BenchRow], cpu_workers: int, cpu_jit: bool, cpu_impl: str, gpu_variant: str, mode: str) -> None:
-    """Print environment info and benchmark results in table format."""
+    """Print system environment info and a formatted throughput/speedup table."""
     print("\n=== Environment ===")
     print(f"OS: {platform.platform()}")
     print(f"Python: {platform.python_version()}")
@@ -257,7 +254,7 @@ def print_summary(rows: list[BenchRow], cpu_workers: int, cpu_jit: bool, cpu_imp
 
 
 def main() -> None:
-    """Parse CLI arguments and run full benchmark matrix."""
+    """Parse CLI arguments and run the full AES-128 benchmark matrix."""
     parser = argparse.ArgumentParser(description="AES-128 CPU vs GPU benchmark (ECB/CTR)")
     parser.add_argument("--blocks", type=str, default="1024,16384,65536,262144,1048576,4194304,10485760,52428800,104857600")
     parser.add_argument("--runs", type=int, default=3)
@@ -266,18 +263,9 @@ def main() -> None:
     parser.add_argument("--cpu-jit", dest="cpu_jit", action="store_true", help="Enable Numba JIT for CPU path (default: on)")
     parser.add_argument("--no-cpu-jit", dest="cpu_jit", action="store_false", help="Disable Numba JIT for CPU path")
     parser.set_defaults(cpu_jit=True)
-    parser.add_argument(
-        "--cpu-impl",
-        type=str,
-        default="software",
-        help="Comma-separated: software (default: software)",
-    )
-    parser.add_argument(
-        "--gpu-variant",
-        type=str,
-        choices=["shared"],
-        default="shared",
-    )
+    parser.add_argument("--cpu-impl", type=str, default="software",
+                        help="Comma-separated CPU implementation labels (default: software)")
+    parser.add_argument("--gpu-variant", type=str, choices=["shared"], default="shared")
     parser.add_argument("--key-mode", type=str, choices=["global", "constkeys", "both"], default="both")
     parser.add_argument("--mode", type=str, choices=["ecb", "ctr", "both"], default="both")
     args = parser.parse_args()
@@ -318,8 +306,7 @@ def main() -> None:
             for variant in gpu_variants:
                 for mode in modes:
                     subset = [
-                        r
-                        for r in all_rows
+                        r for r in all_rows
                         if r.cpu_workers == workers
                         and r.cpu_impl == impl
                         and r.gpu_variant == variant

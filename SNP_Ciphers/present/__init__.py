@@ -1,7 +1,8 @@
-"""PRESENT-128 lightweight block cipher implementations: CPU and GPU.
+"""PRESENT-128 package: CPU and GPU cipher implementations.
 
-Supports ECB and CTR modes for both single-thread and parallel execution.
-Optimized for benchmarking against other SPN ciphers.
+Exports the CPU class (Numba JIT, delta-swap pLayer), the GPU class
+(CUDA kernels for bitsliced and table S-box variants), and the key
+schedule function used by both backends.
 """
 
 from .cpu import PresentCpuOptimized

@@ -1,15 +1,25 @@
-"""GPU-accelerated PRESENT-128 implementation using Numba CUDA.
+"""GPU-accelerated PRESENT-128 using Numba CUDA.
 
-Optimisations over baseline:
-- pLayer via 4 delta-swap steps instead of 63-iteration bit loop
-- Thread coarsening: 8 blocks per thread (configurable)
-- Pinned host memory for faster PCIe transfers
-- Double-buffered CUDA streams for overlapped H2D / kernel / D2H
-- Occupancy-aware grid launch configuration
+The pLayer is implemented via 4 delta-swap operations (instead of the
+reference 63-iteration bit loop), reducing the permutation to 8 arithmetic
+instructions per block.
 
-Provides two S-box strategies:
-1. Bitsliced (default) — tableless boolean logic, zero memory latency
-2. Table-based — constant-memory 16-entry S-box lookup
+Two S-box strategies are available for performance comparison:
+  - 'bitsliced' (default) : tableless Boolean logic operating on all 16
+                            nibbles simultaneously via GF(2) arithmetic.
+                            Zero memory-access latency after register load.
+  - 'table'               : constant-memory 16-entry S-box lookup, one
+                            nibble at a time.
+
+Additional optimisations:
+  - 8x thread coarsening: each CUDA thread processes 8 cipher blocks to
+    amortise shared-memory setup overhead.
+  - Pinned host memory: allocated once and reused across calls to avoid
+    repeated page-locking overhead.
+  - Occupancy-aware block size: queried at construction time via
+    cuda.occupancy.max_potential_block_size.
+  - Native CTR mode kernels: generate and XOR keystream on-device,
+    avoiding a separate ECB pass for CTR mode.
 """
 
 from __future__ import annotations
@@ -29,40 +39,46 @@ try:
 except Exception:
     from common import SBOX, generate_round_keys
 
+# Cast SBOX to uint8 so it can be used as a CUDA constant array.
 SBOX_CONST = SBOX.astype(np.uint8)
 
+
 # ---------------------------------------------------------------------------
-# Device helpers
+# CUDA device functions
 # ---------------------------------------------------------------------------
 
 @cuda.jit(device=True, inline=True)
 def _delta_swap(x, mask, shift):
-    """Swap bit-pairs separated by *shift* positions where *mask* marks the lower bits."""
+    """Swap bit-pairs separated by `shift` positions where `mask` marks the lower bits."""
     t = (x ^ (x >> numba.uint64(shift))) & numba.uint64(mask)
     return x ^ t ^ (t << numba.uint64(shift))
 
 
 @cuda.jit(device=True, inline=True)
 def p_layer_dev(x):
-    """PRESENT pLayer via 4 delta-swaps (bit i -> bit (16i mod 63), bit 63 fixed).
+    """Apply the PRESENT pLayer via 4 delta-swaps on a 64-bit GPU state value.
 
-    The permutation is a 4-position left rotation of each bit's 6-bit index,
-    decomposed into pairwise index-bit swaps: (0,2), (2,4), (1,3), (3,5).
-    Bit 63 is naturally preserved by the masks.
-
-    Verified against the reference 63-iteration loop on 100K random vectors.
+    The PRESENT permutation (bit i → (16i mod 63), bit 63 fixed) is
+    decomposed into 4 pairwise index-bit swaps implemented as delta_swap
+    calls.  This avoids a 63-iteration loop in the hot CUDA kernel path.
+    Verified against the reference loop on 100K random test vectors.
     """
-    x = _delta_swap(x, 0x0A0A0A0A0A0A0A0A, 3)   # swap index bits 0,2
-    x = _delta_swap(x, 0x0000F0F00000F0F0, 12)   # swap index bits 2,4
-    x = _delta_swap(x, 0x00CC00CC00CC00CC, 6)     # swap index bits 1,3
-    x = _delta_swap(x, 0x00000000FF00FF00, 24)    # swap index bits 3,5
+    x = _delta_swap(x, 0x0A0A0A0A0A0A0A0A, 3)   # swap index bits 0 ↔ 2
+    x = _delta_swap(x, 0x0000F0F00000F0F0, 12)   # swap index bits 2 ↔ 4
+    x = _delta_swap(x, 0x00CC00CC00CC00CC, 6)    # swap index bits 1 ↔ 3
+    x = _delta_swap(x, 0x00000000FF00FF00, 24)   # swap index bits 3 ↔ 5
     return x
 
 
 @cuda.jit(device=True, inline=True)
 def sbox_layer_bitsliced_dev(x):
-    """Bitsliced PRESENT S-box — processes all 16 nibbles via boolean logic."""
-    m = numba.uint64(0x1111111111111111)
+    """Apply the PRESENT S-box to all 16 nibbles via bitsliced Boolean equations.
+
+    Extracts 4 bit-planes (one per nibble bit), applies the S-box truth table
+    in GF(2), and recombines the output bit-planes.  All 16 nibbles are
+    processed simultaneously with no memory accesses beyond the input register.
+    """
+    m = numba.uint64(0x1111111111111111)   # mask: bit 0 of every nibble
     one = m
 
     x0 = x & m
@@ -70,6 +86,7 @@ def sbox_layer_bitsliced_dev(x):
     x2 = (x >> 2) & m
     x3 = (x >> 3) & m
 
+    # PRESENT S-box Boolean equations for output bits y0..y3.
     y0 = x0 ^ x2 ^ (x1 & x2) ^ x3
     y1 = x1 ^ (x0 & x1 & x2) ^ x3 ^ (x1 & x3) ^ (x0 & x1 & x3) ^ (x2 & x3) ^ (x0 & x2 & x3)
     y2 = one ^ (x0 & x1) ^ x2 ^ x3 ^ (x0 & x3) ^ (x1 & x3) ^ (x0 & x1 & x3) ^ (x0 & x2 & x3)
@@ -80,7 +97,11 @@ def sbox_layer_bitsliced_dev(x):
 
 @cuda.jit(device=True, inline=True)
 def sbox_layer_table_dev(x):
-    """Table-based PRESENT S-box via constant-memory lookup."""
+    """Apply the PRESENT S-box to all 16 nibbles using a constant-memory table.
+
+    Reads the 16-entry S-box from CUDA constant memory (cached on-chip),
+    performing one lookup per nibble.
+    """
     sbox = cuda.const.array_like(SBOX_CONST)
     out = numba.uint64(0)
     for i in range(16):
@@ -91,15 +112,20 @@ def sbox_layer_table_dev(x):
 
 
 # ---------------------------------------------------------------------------
-# Kernels — coarsening factor = BLOCKS_PER_THREAD
+# ECB kernels (thread coarsening = 8 blocks/thread)
 # ---------------------------------------------------------------------------
 
-BLOCKS_PER_THREAD = 8  # each CUDA thread processes 8 cipher blocks
+BLOCKS_PER_THREAD = 8   # each CUDA thread encrypts 8 PRESENT blocks
 
 
 @cuda.jit
 def present_encrypt_kernel_bitsliced(input_data, output_data, rkeys, nblocks):
-    """Bitsliced PRESENT kernel with 8x thread coarsening."""
+    """PRESENT-128 ECB kernel: bitsliced S-box, 8x thread coarsening.
+
+    Round keys are loaded into shared memory once per CUDA block.
+    Each thread processes 8 consecutive plaintext blocks through 31 full
+    rounds (AddRoundKey → SBox → pLayer) and a final AddRoundKey.
+    """
     tid = cuda.grid(1)
     first = tid * BLOCKS_PER_THREAD
 
@@ -115,16 +141,20 @@ def present_encrypt_kernel_bitsliced(input_data, output_data, rkeys, nblocks):
 
         s = input_data[b]
         for r in range(31):
-            s ^= shared_rkeys[r]
-            s = sbox_layer_bitsliced_dev(s)
-            s = p_layer_dev(s)
-        s ^= shared_rkeys[31]
+            s ^= shared_rkeys[r]              # AddRoundKey
+            s = sbox_layer_bitsliced_dev(s)   # SubNibbles (bitsliced)
+            s = p_layer_dev(s)                # pLayer
+        s ^= shared_rkeys[31]                 # Final AddRoundKey
         output_data[b] = s
 
 
 @cuda.jit
 def present_encrypt_kernel_table(input_data, output_data, rkeys, nblocks):
-    """Table-based PRESENT kernel with 8x thread coarsening."""
+    """PRESENT-128 ECB kernel: table-based S-box, 8x thread coarsening.
+
+    Identical structure to the bitsliced kernel, but uses constant-memory
+    S-box lookup for SubNibbles instead of Boolean equations.
+    """
     tid = cuda.grid(1)
     first = tid * BLOCKS_PER_THREAD
 
@@ -140,16 +170,26 @@ def present_encrypt_kernel_table(input_data, output_data, rkeys, nblocks):
 
         s = input_data[b]
         for r in range(31):
-            s ^= shared_rkeys[r]
-            s = sbox_layer_table_dev(s)
-            s = p_layer_dev(s)
-        s ^= shared_rkeys[31]
+            s ^= shared_rkeys[r]           # AddRoundKey
+            s = sbox_layer_table_dev(s)    # SubNibbles (table)
+            s = p_layer_dev(s)             # pLayer
+        s ^= shared_rkeys[31]              # Final AddRoundKey
         output_data[b] = s
 
 
+# ---------------------------------------------------------------------------
+# Native CTR kernels (generate keystream and XOR in one pass)
+# ---------------------------------------------------------------------------
+
 @cuda.jit
 def present_encrypt_ctr_kernel_bitsliced(input_data, output_data, rkeys, base_ctr_block, nblocks):
-    """Bitsliced PRESENT CTR kernel with 8x thread coarsening."""
+    """PRESENT-128 native CTR kernel: bitsliced S-box, 8x thread coarsening.
+
+    Each block encrypts a counter value (base_ctr_block + block_index) directly
+    on the device, then XORs the resulting keystream word with the corresponding
+    plaintext word.  Eliminates the separate ECB + XOR pass used in the generic
+    CTR path.
+    """
     tid = cuda.grid(1)
     first = tid * BLOCKS_PER_THREAD
 
@@ -163,18 +203,23 @@ def present_encrypt_ctr_kernel_bitsliced(input_data, output_data, rkeys, base_ct
         if b >= nblocks:
             return
 
+        # Counter block: nonce prefix embedded in base_ctr_block, counter in low bits.
         s = numba.uint64(base_ctr_block) + numba.uint64(b)
         for r in range(31):
             s ^= shared_rkeys[r]
             s = sbox_layer_bitsliced_dev(s)
             s = p_layer_dev(s)
         s ^= shared_rkeys[31]
+        # XOR the encrypted counter (keystream) with the plaintext block.
         output_data[b] = s ^ input_data[b]
 
 
 @cuda.jit
 def present_encrypt_ctr_kernel_table(input_data, output_data, rkeys, base_ctr_block, nblocks):
-    """Table-based PRESENT CTR kernel with 8x thread coarsening."""
+    """PRESENT-128 native CTR kernel: table-based S-box, 8x thread coarsening.
+
+    Same structure as the bitsliced CTR kernel; uses table lookup for SubNibbles.
+    """
     tid = cuda.grid(1)
     first = tid * BLOCKS_PER_THREAD
 
@@ -198,11 +243,14 @@ def present_encrypt_ctr_kernel_table(input_data, output_data, rkeys, base_ctr_bl
 
 
 # ---------------------------------------------------------------------------
-# Helper: choose block size via occupancy query
+# Occupancy helper
 # ---------------------------------------------------------------------------
 
 def _best_block_size(kernel, fallback: int = 256) -> int:
-    """Return a block size that maximises occupancy, or *fallback*."""
+    """Query CUDA occupancy API to find the block size that maximises occupancy.
+
+    Falls back to `fallback` if the query is unsupported or raises.
+    """
     try:
         _, block = cuda.occupancy.max_potential_block_size(kernel)
         return int(block)
@@ -211,29 +259,26 @@ def _best_block_size(kernel, fallback: int = 256) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Timing container
+# Timing and public class
 # ---------------------------------------------------------------------------
 
 @dataclass
 class GpuTiming:
-    """GPU timing breakdown for block encryption operation."""
+    """Timing breakdown for a single GPU encryption call."""
     total_seconds: float
     kernel_seconds: float
     h2d_d2h_seconds: float
 
 
-# ---------------------------------------------------------------------------
-# Public class
-# ---------------------------------------------------------------------------
-
 class PresentGpuOptimized:
-    """PRESENT-128 GPU cipher — bitsliced (default) or table variant.
+    """PRESENT-128 GPU cipher — bitsliced (default) or table S-box variant.
 
     Key optimisations:
-    - Delta-swap pLayer (4 ops vs 63-iteration loop)
-    - 8x thread coarsening to amortise shared-memory setup
-    - Pinned host + device buffers cached across calls (no per-call allocation)
-    - Occupancy-aware block size selection
+      - Delta-swap pLayer: 4 arithmetic operations instead of 63 iterations.
+      - 8x thread coarsening to amortise shared-memory setup per block.
+      - Pinned host memory + device buffers allocated once and reused.
+      - Occupancy-aware block size selection at construction time.
+      - Native CTR kernels that fuse counter generation and XOR on-device.
     """
 
     DEFAULT_VARIANT = "bitsliced"
@@ -244,7 +289,7 @@ class PresentGpuOptimized:
             raise ValueError("variant must be 'table' or 'bitsliced'")
         self.variant = variant
 
-        # Pick the kernel once so we can query occupancy.
+        # Select the correct kernel pair based on S-box variant.
         self._kernel = (
             present_encrypt_kernel_bitsliced
             if variant == "bitsliced"
@@ -258,7 +303,7 @@ class PresentGpuOptimized:
         self.block_size = int(block_size) if block_size is not None else _best_block_size(self._kernel)
         self._is_key_set = False
 
-        # Cached buffers — allocated once, grown as needed.
+        # Persistent pinned + device buffers, allocated lazily and grown on demand.
         self._buf_nblocks = 0
         self._h_in: np.ndarray | None = None
         self._h_out: np.ndarray | None = None
@@ -266,7 +311,7 @@ class PresentGpuOptimized:
         self._d_out = None
 
     def _ensure_buffers(self, nblocks: int) -> None:
-        """Allocate pinned host + device buffers (reused if size matches)."""
+        """Allocate pinned host and device buffers, reusing existing ones if sizes match."""
         if nblocks == self._buf_nblocks:
             return
         self._h_in = cuda.pinned_array(nblocks, dtype=np.uint64)
@@ -275,27 +320,27 @@ class PresentGpuOptimized:
         self._d_out = cuda.device_array(nblocks, dtype=np.uint64)
         self._buf_nblocks = nblocks
 
-    # ---- key management ----------------------------------------------------
-
     def set_key(self, key: bytes) -> None:
+        """Expand `key` into 32 round keys and upload them to device memory."""
         if len(key) != 16:
             raise ValueError("PRESENT-128 requires a 16-byte key")
         rkeys = generate_round_keys(key).astype(np.uint64)
         self.rkeys_device = cuda.to_device(rkeys)
         self._is_key_set = True
 
-    # ---- validation --------------------------------------------------------
-
     @staticmethod
     def _validate_data(data: bytes) -> int:
+        """Raise ValueError if data is not a multiple of 8 bytes; return block count."""
         if len(data) % 8 != 0:
             raise ValueError("PRESENT block size is 8 bytes")
         return len(data) // 8
 
-    # ---- public API --------------------------------------------------------
-
     def encrypt_ecb(self, data: bytes) -> tuple[bytes, GpuTiming]:
-        """Encrypt data in ECB mode on GPU with cached pinned-memory transfers."""
+        """Encrypt `data` in PRESENT-128 ECB mode on the GPU.
+
+        Uses cached pinned host and device buffers to avoid repeated allocation.
+        Kernel timing is measured via perf_counter around a cuda.synchronize().
+        """
         if not self._is_key_set:
             raise RuntimeError("Call set_key(key) before encryption")
 
@@ -309,7 +354,7 @@ class PresentGpuOptimized:
 
         t0 = time.perf_counter()
 
-        # Host -> pinned -> device (reuse cached buffers)
+        # Copy plaintext into pinned host buffer then transfer to device.
         self._h_in[:] = states
         self._d_in.copy_to_device(self._h_in)
 
@@ -323,7 +368,7 @@ class PresentGpuOptimized:
         cuda.synchronize()
         kernel_s = time.perf_counter() - k0
 
-        # Device -> pinned -> host bytes
+        # Copy ciphertext from device into pinned host buffer.
         self._d_out.copy_to_host(self._h_out)
         ct = self._h_out.astype(">u8").tobytes()
 
@@ -332,7 +377,12 @@ class PresentGpuOptimized:
         return ct, GpuTiming(total_s, kernel_s, transfer_s)
 
     def encrypt_ctr(self, data: bytes, nonce: bytes | None = None) -> tuple[bytes, GpuTiming]:
-        """Encrypt data natively in CTR mode on the GPU."""
+        """Encrypt `data` in PRESENT-128 CTR mode using the native CTR GPU kernel.
+
+        Constructs the base counter value from `nonce` on the host, then
+        launches the on-device CTR kernel that generates the keystream and XORs
+        each block's plaintext in a single pass.
+        """
         if not self._is_key_set:
             raise RuntimeError("Call set_key(key) before encryption")
 
@@ -346,7 +396,8 @@ class PresentGpuOptimized:
             nonce = os.urandom(block_bytes // 2)
         if len(nonce) >= block_bytes:
             raise ValueError("nonce must be shorter than block size")
-        
+
+        # Pack nonce into upper bytes and leave lower bytes for the counter.
         base_ctr_block = int.from_bytes(nonce + bytes(block_bytes - len(nonce)), "big")
 
         states = np.frombuffer(data, dtype=">u8").astype(np.uint64)
@@ -354,7 +405,6 @@ class PresentGpuOptimized:
 
         t0 = time.perf_counter()
 
-        # Host -> pinned -> device
         self._h_in[:] = states
         self._d_in.copy_to_device(self._h_in)
 
@@ -368,7 +418,6 @@ class PresentGpuOptimized:
         cuda.synchronize()
         kernel_s = time.perf_counter() - k0
 
-        # Device -> pinned -> host bytes
         self._d_out.copy_to_host(self._h_out)
         ct = self._h_out.astype(">u8").tobytes()
 
@@ -378,6 +427,7 @@ class PresentGpuOptimized:
 
 
 def has_cuda_gpu() -> bool:
+    """Return True if a CUDA-capable GPU is available and Numba can use it."""
     try:
         return cuda.is_available()
     except Exception:

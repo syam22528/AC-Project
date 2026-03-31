@@ -1,6 +1,8 @@
-"""GIFT-64-128 cipher implementations: CPU and GPU backends.
+"""GIFT-64-128 package: CPU and GPU cipher implementations.
 
-Exports optimized CPU/GPU classes and shared key schedule helpers.
+Exports the CPU class (Numba JIT, table S-box), the GPU class
+(CUDA kernels for table and bitsliced S-box variants), and the key
+schedule helper used by both backends.
 """
 
 from .cpu import GiftCpuOptimized

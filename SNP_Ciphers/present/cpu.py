@@ -1,14 +1,17 @@
 """PRESENT-128 CPU implementation with Numba JIT.
 
-Optimisations over baseline:
-- pLayer via 4 delta-swap steps instead of 63-iteration bit loop
+Each of the 31 main rounds applies:
+  1. AddRoundKey  — XOR state with the 64-bit round key.
+  2. SBox         — 4-bit substitution on each of the 16 nibbles.
+  3. pLayer       — 64-bit bit permutation (bit i → bit (16i mod 63)).
 
-Implements 31 rounds of:
-1. AddRoundKey (XOR with round key)
-2. SBox (4-bit table lookup, 16 nibbles per 64-bit state)
-3. pLayer (64-bit bit permutation)
+The pLayer is implemented as 4 sequential delta-swap operations instead of
+a 63-iteration bit loop, which reduces the permutation to 8 XOR/AND
+instructions per block.
 
-Supports both single-threaded and parallel execution via Numba.
+A 32nd AddRoundKey follows the main rounds to produce the final ciphertext.
+
+Single-threaded and parallel (Numba prange / OpenMP) paths are both supported.
 """
 
 from __future__ import annotations
@@ -48,12 +51,12 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
-# Core layers
+# Core layers (JIT-compiled device functions)
 # ---------------------------------------------------------------------------
 
 @njit(cache=True)
 def _sbox_layer(state: np.uint64, sbox: np.ndarray) -> np.uint64:
-    """Apply PRESENT S-box to all 16 nibbles of 64-bit state."""
+    """Apply the PRESENT S-box to all 16 nibbles of the 64-bit state."""
     out = np.uint64(0)
     for i in range(16):
         nib = np.uint64((state >> np.uint64(i * 4)) & np.uint64(0xF))
@@ -63,48 +66,59 @@ def _sbox_layer(state: np.uint64, sbox: np.ndarray) -> np.uint64:
 
 @njit(cache=True, inline="always")
 def _delta_swap(x: np.uint64, mask: np.uint64, shift: np.uint64) -> np.uint64:
-    """Swap bit-pairs separated by *shift* where *mask* marks the lower bits."""
+    """Swap bit-pairs separated by `shift` positions where `mask` marks the lower bits.
+
+    Given a pair of bits at positions p and p+shift, the delta-swap exchanges
+    them when the bit at position p is selected by `mask`.
+    t = (x ^ (x >> shift)) & mask  keeps only differing bit-pairs.
+    x ^ t ^ (t << shift) swaps those pairs in one step.
+    """
     t = (x ^ (x >> shift)) & mask
     return x ^ t ^ (t << shift)
 
 
 @njit(cache=True)
 def _p_layer(state: np.uint64) -> np.uint64:
-    """PRESENT pLayer via 4 delta-swaps (bit i -> bit (16i mod 63), bit 63 fixed).
+    """Apply the PRESENT pLayer via 4 delta-swap operations.
 
-    The permutation is a 4-position left rotation of each bit's 6-bit index,
-    decomposed into pairwise index-bit swaps: (0,2), (2,4), (1,3), (3,5).
-    Bit 63 is naturally preserved by the masks.
+    The pLayer permutation (bit i → (16i mod 63), bit 63 fixed) can be
+    decomposed into 4 pairwise bit-index swaps:
+      (index bit 0, index bit 2), (index bit 2, index bit 4),
+      (index bit 1, index bit 3), (index bit 3, index bit 5).
+    Each swap is implemented as one delta_swap call.  Bit 63 is preserved
+    automatically by the choice of masks.
 
-    Verified against the reference 63-iteration loop on 100K random vectors.
+    Correctness verified against the reference 63-iteration loop on 100K
+    random test vectors.
     """
     x = state
-    x = _delta_swap(x, np.uint64(0x0A0A0A0A0A0A0A0A), np.uint64(3))   # swap index bits 0,2
-    x = _delta_swap(x, np.uint64(0x0000F0F00000F0F0), np.uint64(12))   # swap index bits 2,4
-    x = _delta_swap(x, np.uint64(0x00CC00CC00CC00CC), np.uint64(6))     # swap index bits 1,3
-    x = _delta_swap(x, np.uint64(0x00000000FF00FF00), np.uint64(24))    # swap index bits 3,5
+    x = _delta_swap(x, np.uint64(0x0A0A0A0A0A0A0A0A), np.uint64(3))   # swap index bits 0 ↔ 2
+    x = _delta_swap(x, np.uint64(0x0000F0F00000F0F0), np.uint64(12))   # swap index bits 2 ↔ 4
+    x = _delta_swap(x, np.uint64(0x00CC00CC00CC00CC), np.uint64(6))    # swap index bits 1 ↔ 3
+    x = _delta_swap(x, np.uint64(0x00000000FF00FF00), np.uint64(24))   # swap index bits 3 ↔ 5
     return x
 
 
 # ---------------------------------------------------------------------------
-# Block encryption
+# Parallel block encryption
 # ---------------------------------------------------------------------------
 
 @njit(cache=True, parallel=True)
 def _encrypt_blocks(states: np.ndarray, round_keys: np.ndarray, sbox: np.ndarray) -> np.ndarray:
-    """Parallel PRESENT block encryption over array of 64-bit states.
+    """Encrypt an array of 64-bit PRESENT states in parallel using Numba prange.
 
-    Each state is processed independently via prange (OpenMP).
-    31 main rounds + 1 final AddRoundKey.
+    Runs 31 full rounds (AddRoundKey + SBox + pLayer) followed by a final
+    AddRoundKey.  Each state is independent so prange can distribute work
+    across CPU threads via OpenMP.
     """
     out = np.empty_like(states)
     for i in prange(states.size):
         s = np.uint64(states[i])
         for r in range(31):
-            s ^= np.uint64(round_keys[r])
-            s = _sbox_layer(s, sbox)
-            s = _p_layer(s)
-        s ^= np.uint64(round_keys[31])
+            s ^= np.uint64(round_keys[r])   # AddRoundKey
+            s = _sbox_layer(s, sbox)        # SubNibbles
+            s = _p_layer(s)                 # pLayer
+        s ^= np.uint64(round_keys[31])      # Final AddRoundKey (round key 32)
         out[i] = s
     return out
 
@@ -116,10 +130,9 @@ def _encrypt_blocks(states: np.ndarray, round_keys: np.ndarray, sbox: np.ndarray
 class PresentCpuOptimized:
     """PRESENT-128 CPU cipher with Numba JIT compilation.
 
-    Single-threaded or parallel execution via Numba's prange (OpenMP).
-
-    Block size: 8 bytes (64-bit state)
-    Rounds: 31 main + 1 final AddRoundKey
+    Block size: 8 bytes (64-bit state).
+    Rounds: 31 main rounds + 1 final AddRoundKey.
+    Supports single-threaded and parallel execution via Numba prange (OpenMP).
     """
 
     block_size = 8
@@ -131,19 +144,27 @@ class PresentCpuOptimized:
 
     @staticmethod
     def _validate_inputs(data: bytes, key: bytes) -> None:
+        """Raise ValueError if data is not a multiple of 8 bytes or key is not 16 bytes."""
         if len(data) % 8 != 0:
             raise ValueError("PRESENT block size is 8 bytes")
         if len(key) != 16:
             raise ValueError("PRESENT-128 requires a 16-byte key")
 
     def _get_round_keys(self, key: bytes) -> np.ndarray:
+        """Return the 32 round keys for `key`, using a cached result if the key is unchanged."""
         if self._cached_key != key or self._round_keys is None:
             self._round_keys = generate_round_keys(key)
             self._cached_key = bytes(key)
         return self._round_keys
 
     def encrypt_ecb(self, data: bytes, key: bytes, workers: int = 1) -> bytes:
-        """Encrypt data in ECB mode using PRESENT-128."""
+        """Encrypt `data` in PRESENT-128 ECB mode using the JIT-compiled kernel.
+
+        Args:
+            data: Plaintext bytes, must be a non-zero multiple of 8.
+            key: 16-byte PRESENT key.
+            workers: Number of CPU threads (>1 uses parallel prange path).
+        """
         self._validate_inputs(data, key)
         if len(data) == 0:
             return b""
@@ -165,7 +186,11 @@ class PresentCpuOptimized:
         return out.astype(">u8").tobytes()
 
     def encrypt_ctr(self, data: bytes, key: bytes, workers: int = 1, nonce: bytes | None = None) -> bytes:
-        """Encrypt data in CTR mode using ECB(counter) keystream generation."""
+        """Encrypt `data` in PRESENT-128 CTR mode.
+
+        Builds counter blocks (nonce || counter), encrypts them via ECB to
+        produce a keystream, then XORs the keystream with the plaintext.
+        """
         if len(key) != 16:
             raise ValueError("PRESENT-128 requires a 16-byte key")
         if len(data) % 8 != 0:

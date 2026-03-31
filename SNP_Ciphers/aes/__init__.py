@@ -1,6 +1,8 @@
-"""AES-128 implementations: CPU (baseline) and GPU (Numba CUDA).
+"""AES-128 package: CPU and GPU cipher implementations.
 
-Supports ECB and CTR modes for both single-thread and parallel execution.
+Exports the CPU class (Numba JIT, ECB and CTR) and the GPU class
+(Numba CUDA, shared-memory S-box, global or constant-memory round keys).
+Also exposes has_cuda_gpu() for environment probing.
 """
 
 from .cpu import AesCpuOptimized
