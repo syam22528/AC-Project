@@ -1,6 +1,6 @@
 # SPN Cipher GPU Acceleration — Optimizations & Benchmark Results
 
-> **Project**: GPU-accelerated benchmarking of four Substitution-Permutation Network (SPN) ciphers  
+GPU-accelerated benchmarking of four Substitution-Permutation Network (SPN) ciphers  
 > **Ciphers**: AES-128, GIFT-64-128, PRESENT-128, SKINNY-64-128  
 > **Stack**: Python 3.10 · Numba JIT (CPU) · Numba CUDA JIT (GPU) · NumPy · Matplotlib  
 > **Modes**: ECB (fully parallel) · CTR (counter-mode with XOR keystream)
